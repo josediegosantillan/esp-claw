@@ -1,0 +1,2451 @@
+diff --git a/application/basic_demo/fatfs_image/scheduler/schedules.json b/application/basic_demo/fatfs_image/scheduler/schedules.json
+new file mode 100644
+index 0000000..d41ff7d
+--- /dev/null
++++ b/application/basic_demo/fatfs_image/scheduler/schedules.json
+@@ -0,0 +1,50 @@
++[
++  {
++    "id": "demo_interval_1m",
++    "enabled": true,
++    "kind": "interval",
++    "timezone": "CST-8",
++    "interval_ms": 60000,
++    "event_type": "schedule",
++    "event_key": "demo_interval_1m",
++    "source_channel": "time",
++    "content_type": "trigger",
++    "session_policy": "trigger",
++    "text": "5 minute interval demo",
++    "payload_json": "{\"message\":\"interval tick every 5 minutes\",\"level\":\"info\"}",
++    "catch_up_policy": "skip",
++    "max_runs": 0
++  },
++  {
++    "id": "demo_cron_hourly",
++    "enabled": false,
++    "kind": "cron",
++    "timezone": "CST-8",
++    "cron_expr": "0 * * * *",
++    "event_type": "schedule",
++    "event_key": "demo_cron_hourly",
++    "source_channel": "time",
++    "content_type": "trigger",
++    "session_policy": "trigger",
++    "text": "hourly cron demo",
++    "payload_json": "{\"message\":\"cron tick at minute 0 of every hour\",\"kind\":\"cron\"}",
++    "catch_up_policy": "fire_once",
++    "max_runs": 0
++  },
++  {
++    "id": "demo_once_bootstrap",
++    "enabled": false,
++    "kind": "once",
++    "timezone": "CST-8",
++    "start_at_ms": 1893456000000,
++    "event_type": "schedule",
++    "event_key": "demo_once_bootstrap",
++    "source_channel": "time",
++    "content_type": "trigger",
++    "session_policy": "trigger",
++    "text": "one-shot bootstrap demo",
++    "payload_json": "{\"message\":\"one-shot schedule example\",\"kind\":\"once\"}",
++    "catch_up_policy": "skip",
++    "max_runs": 5
++  }
++]
+diff --git a/application/basic_demo/main/CMakeLists.txt b/application/basic_demo/main/CMakeLists.txt
+index d3b57f1..3ec3006 100644
+--- a/application/basic_demo/main/CMakeLists.txt
++++ b/application/basic_demo/main/CMakeLists.txt
+@@ -21,6 +21,7 @@ idf_component_register(
+         cap_lua
+         cap_mcp_client
+         cap_mcp_server
++        cap_scheduler
+         cap_skill
+         cap_time
+         cap_web_search
+diff --git a/application/basic_demo/main/app_clawgent.c b/application/basic_demo/main/app_clawgent.c
+index bc22e57..8c3a081 100644
+--- a/application/basic_demo/main/app_clawgent.c
++++ b/application/basic_demo/main/app_clawgent.c
+@@ -12,6 +12,7 @@
+ #include "cap_lua.h"
+ #include "cap_mcp_client.h"
+ #include "cap_mcp_server.h"
++#include "cap_scheduler.h"
+ #include "cap_skill.h"
+ #include "cap_time.h"
+ #include "cap_web_search.h"
+@@ -36,6 +37,8 @@ static const char *const BASIC_DEMO_LLM_VISIBLE_GROUPS[] = {
+ #define BASIC_DEMO_LUA_ROOT_DIR       "/fatfs/data/lua"
+ #define BASIC_DEMO_FATFS_BASE_PATH       "/fatfs/data"
+ #define BASIC_DEMO_AUTOMATION_RULES_PATH "/fatfs/data/automation/automations.json"
++#define BASIC_DEMO_SCHEDULER_RULES_PATH  "/fatfs/data/scheduler/schedules.json"
++#define BASIC_DEMO_SCHEDULER_STATE_PATH  "/fatfs/data/scheduler/scheduler_state.json"
+ #define BASIC_DEMO_IM_ATTACHMENT_ROOT    "/fatfs/data/inbox"
+ #define BASIC_DEMO_IM_ATTACHMENT_MAX_BYTES (2 * 1024 * 1024)
+ 
+@@ -95,8 +98,8 @@ static esp_err_t init_skills(void)
+ static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
+ {
+     claw_cap_config_t cap_config = {
+-        .max_capabilities = 32,
+-        .max_groups = 16,
++        .max_capabilities = 48,
++        .max_groups = 20,
+     };
+ 
+     ESP_RETURN_ON_ERROR(claw_cap_init(&cap_config), TAG, "Failed to init claw_cap");
+@@ -177,6 +180,13 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
+                         }),
+                         TAG,
+                         "Failed to whitelist event_router");
++    ESP_RETURN_ON_ERROR(cap_cli_register_command(&(cap_cli_command_t) {
++                            .command_name = "scheduler",
++                            .description = "Manage and inspect scheduler operations",
++                            .usage_hint = "scheduler --list",
++                        }),
++                        TAG,
++                        "Failed to whitelist scheduler");
+     ESP_RETURN_ON_ERROR(cap_time_set_timezone(settings->time_timezone),
+                         TAG,
+                         "Failed to set time cap timezone");
+@@ -266,6 +276,9 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
+     ESP_RETURN_ON_ERROR(cap_mcp_server_register_group(),
+                         TAG,
+                         "Failed to register MCP server cap");
++    ESP_RETURN_ON_ERROR(cap_scheduler_register_group(),
++                        TAG,
++                        "Failed to register scheduler cap");
+     ESP_RETURN_ON_ERROR(cap_cli_register_group(), TAG, "Failed to register CLI cap");
+     ESP_RETURN_ON_ERROR(cap_skill_register_group(),
+                         TAG,
+@@ -308,6 +321,20 @@ esp_err_t app_clawgent_start(const basic_demo_settings_t *settings)
+     ESP_RETURN_ON_ERROR(claw_event_router_init(&router_config),
+                         TAG,
+                         "Failed to init event router");
++    ESP_RETURN_ON_ERROR(cap_scheduler_init(&(cap_scheduler_config_t) {
++                            .schedules_path = BASIC_DEMO_SCHEDULER_RULES_PATH,
++                            .state_path = BASIC_DEMO_SCHEDULER_STATE_PATH,
++                            .default_timezone = settings->time_timezone,
++                            .tick_ms = 1000,
++                            .max_items = 32,
++                            .task_stack_size = 6144,
++                            .task_priority = 5,
++                            .task_core = tskNO_AFFINITY,
++                            .publish_event = claw_event_router_publish,
++                            .persist_after_fire = true,
++                        }),
++                        TAG,
++                        "Failed to init scheduler");
+     ESP_RETURN_ON_ERROR(init_memory(), TAG, "Failed to init memory");
+     ESP_RETURN_ON_ERROR(init_skills(), TAG, "Failed to init skills");
+     ESP_RETURN_ON_ERROR(init_capabilities(settings), TAG, "Failed to init capabilities");
+@@ -357,6 +384,7 @@ esp_err_t app_clawgent_start(const basic_demo_settings_t *settings)
+                         "Failed to add cap tools provider");
+     ESP_RETURN_ON_ERROR(claw_core_start(), TAG, "Failed to start claw_core");
+     ESP_RETURN_ON_ERROR(claw_event_router_start(), TAG, "Failed to start event router");
++    ESP_RETURN_ON_ERROR(cap_scheduler_start(), TAG, "Failed to start scheduler");
+     ESP_RETURN_ON_ERROR(basic_demo_cli_start(), TAG, "Failed to start CLI");
+ 
+     return ESP_OK;
+diff --git a/application/basic_demo/main/basic_demo_cli.c b/application/basic_demo/main/basic_demo_cli.c
+index 41e4527..9e1cc20 100644
+--- a/application/basic_demo/main/basic_demo_cli.c
++++ b/application/basic_demo/main/basic_demo_cli.c
+@@ -4,6 +4,7 @@
+ #include <string.h>
+ 
+ #include "cap_im_qq.h"
++#include "cmd_cap_scheduler.h"
+ #include "cmd_cap_llm_inspect.h"
+ #include "cmd_cap_mcp_client.h"
+ #include "cmd_cap_mcp_server.h"
+@@ -622,6 +623,7 @@ esp_err_t basic_demo_cli_start(void)
+     register_cap_llm_inspect();
+     register_cap_mcp_client();
+     register_cap_mcp_server();
++    register_cap_scheduler();
+     register_cap_skill();
+     register_cap_time();
+     register_cap_web_search();
+diff --git a/components/cap_scheduler/CMakeLists.txt b/components/cap_scheduler/CMakeLists.txt
+new file mode 100644
+index 0000000..7cdd1b6
+--- /dev/null
++++ b/components/cap_scheduler/CMakeLists.txt
+@@ -0,0 +1,14 @@
++idf_component_register(
++    SRCS
++        "src/cap_scheduler.c"
++        "src/cap_scheduler_parser.c"
++        "src/cap_scheduler_store.c"
++        "src/cmd_cap_scheduler.c"
++    INCLUDE_DIRS
++        "include"
++    REQUIRES
++        claw_cap
++        claw_event_router
++        console
++        json
++)
+diff --git a/components/cap_scheduler/include/cap_scheduler.h b/components/cap_scheduler/include/cap_scheduler.h
+new file mode 100644
+index 0000000..5cfc161
+--- /dev/null
++++ b/components/cap_scheduler/include/cap_scheduler.h
+@@ -0,0 +1,112 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#include "claw_event_router.h"
++#include "esp_err.h"
++#include "freertos/FreeRTOS.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define CAP_SCHEDULER_ID_LEN 64
++#define CAP_SCHEDULER_TZ_LEN 32
++#define CAP_SCHEDULER_EXPR_LEN 64
++#define CAP_SCHEDULER_EVENT_TYPE_LEN 32
++#define CAP_SCHEDULER_EVENT_KEY_LEN 96
++#define CAP_SCHEDULER_CHANNEL_LEN 16
++#define CAP_SCHEDULER_CHAT_ID_LEN 96
++#define CAP_SCHEDULER_CONTENT_TYPE_LEN 24
++#define CAP_SCHEDULER_SESSION_POLICY_LEN 24
++#define CAP_SCHEDULER_TEXT_LEN 256
++#define CAP_SCHEDULER_PAYLOAD_LEN 512
++
++typedef enum {
++    CAP_SCHEDULER_ITEM_ONCE = 0,
++    CAP_SCHEDULER_ITEM_INTERVAL = 1,
++    CAP_SCHEDULER_ITEM_CRON = 2,
++} cap_scheduler_item_kind_t;
++
++typedef enum {
++    CAP_SCHEDULER_STATUS_SCHEDULED = 0,
++    CAP_SCHEDULER_STATUS_PAUSED = 1,
++    CAP_SCHEDULER_STATUS_RUNNING = 2,
++    CAP_SCHEDULER_STATUS_COMPLETED = 3,
++    CAP_SCHEDULER_STATUS_ERROR = 4,
++    CAP_SCHEDULER_STATUS_DISABLED = 5,
++} cap_scheduler_status_t;
++
++typedef enum {
++    CAP_SCHEDULER_CATCH_UP_SKIP = 0,
++    CAP_SCHEDULER_CATCH_UP_FIRE_ONCE = 1,
++} cap_scheduler_catch_up_policy_t;
++
++typedef struct {
++    char id[CAP_SCHEDULER_ID_LEN];
++    bool enabled;
++    cap_scheduler_item_kind_t kind;
++    char timezone[CAP_SCHEDULER_TZ_LEN];
++    int64_t start_at_ms;
++    int64_t end_at_ms;
++    int64_t interval_ms;
++    char cron_expr[CAP_SCHEDULER_EXPR_LEN];
++    char event_type[CAP_SCHEDULER_EVENT_TYPE_LEN];
++    char event_key[CAP_SCHEDULER_EVENT_KEY_LEN];
++    char source_channel[CAP_SCHEDULER_CHANNEL_LEN];
++    char chat_id[CAP_SCHEDULER_CHAT_ID_LEN];
++    char content_type[CAP_SCHEDULER_CONTENT_TYPE_LEN];
++    char session_policy[CAP_SCHEDULER_SESSION_POLICY_LEN];
++    char text[CAP_SCHEDULER_TEXT_LEN];
++    char payload_json[CAP_SCHEDULER_PAYLOAD_LEN];
++    cap_scheduler_catch_up_policy_t catch_up_policy;
++    int max_runs;
++} cap_scheduler_item_t;
++
++typedef struct {
++    cap_scheduler_item_t item;
++    cap_scheduler_status_t status;
++    int64_t next_fire_ms;
++    int64_t last_fire_ms;
++    int64_t last_success_ms;
++    int run_count;
++    int missed_count;
++    esp_err_t last_error_code;
++} cap_scheduler_snapshot_t;
++
++typedef esp_err_t (*cap_scheduler_publish_fn)(const claw_event_t *event);
++
++typedef struct {
++    const char *schedules_path;
++    const char *state_path;
++    const char *default_timezone;
++    uint32_t tick_ms;
++    uint32_t max_items;
++    uint32_t task_stack_size;
++    UBaseType_t task_priority;
++    BaseType_t task_core;
++    cap_scheduler_publish_fn publish_event;
++    bool persist_after_fire;
++} cap_scheduler_config_t;
++
++esp_err_t cap_scheduler_register_group(void);
++esp_err_t cap_scheduler_init(const cap_scheduler_config_t *config);
++esp_err_t cap_scheduler_start(void);
++esp_err_t cap_scheduler_stop(void);
++esp_err_t cap_scheduler_reload(void);
++esp_err_t cap_scheduler_add(const cap_scheduler_item_t *item);
++esp_err_t cap_scheduler_update(const cap_scheduler_item_t *item);
++esp_err_t cap_scheduler_remove(const char *id);
++esp_err_t cap_scheduler_enable(const char *id, bool enabled);
++esp_err_t cap_scheduler_pause(const char *id);
++esp_err_t cap_scheduler_resume(const char *id);
++esp_err_t cap_scheduler_trigger_now(const char *id);
++esp_err_t cap_scheduler_get_snapshot(const char *id, cap_scheduler_snapshot_t *out);
++esp_err_t cap_scheduler_list_json(char *buf, size_t size);
++esp_err_t cap_scheduler_get_state_json(const char *id, char *buf, size_t size);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/components/cap_scheduler/include/cmd_cap_scheduler.h b/components/cap_scheduler/include/cmd_cap_scheduler.h
+new file mode 100644
+index 0000000..c5d56a3
+--- /dev/null
++++ b/components/cap_scheduler/include/cmd_cap_scheduler.h
+@@ -0,0 +1,11 @@
++#pragma once
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++void register_cap_scheduler(void);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/components/cap_scheduler/src/cap_scheduler.c b/components/cap_scheduler/src/cap_scheduler.c
+new file mode 100644
+index 0000000..9f9f913
+--- /dev/null
++++ b/components/cap_scheduler/src/cap_scheduler.c
+@@ -0,0 +1,1021 @@
++#include "cap_scheduler_internal.h"
++
++#include <inttypes.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "claw_cap.h"
++#include "esp_check.h"
++#include "esp_log.h"
++
++static const char *TAG = "cap_scheduler";
++
++cap_scheduler_runtime_t s_cap_scheduler = {0};
++
++static esp_err_t cap_scheduler_execute_list(const char *input_json,
++                                            const claw_cap_call_context_t *ctx,
++                                            char *output,
++                                            size_t output_size);
++static esp_err_t cap_scheduler_execute_get(const char *input_json,
++                                           const claw_cap_call_context_t *ctx,
++                                           char *output,
++                                           size_t output_size);
++static esp_err_t cap_scheduler_execute_enable(const char *input_json,
++                                              const claw_cap_call_context_t *ctx,
++                                              char *output,
++                                              size_t output_size);
++static esp_err_t cap_scheduler_execute_disable(const char *input_json,
++                                               const claw_cap_call_context_t *ctx,
++                                               char *output,
++                                               size_t output_size);
++static esp_err_t cap_scheduler_execute_pause(const char *input_json,
++                                             const claw_cap_call_context_t *ctx,
++                                             char *output,
++                                             size_t output_size);
++static esp_err_t cap_scheduler_execute_resume(const char *input_json,
++                                              const claw_cap_call_context_t *ctx,
++                                              char *output,
++                                              size_t output_size);
++static esp_err_t cap_scheduler_execute_trigger(const char *input_json,
++                                               const claw_cap_call_context_t *ctx,
++                                               char *output,
++                                               size_t output_size);
++static esp_err_t cap_scheduler_execute_reload(const char *input_json,
++                                              const claw_cap_call_context_t *ctx,
++                                              char *output,
++                                              size_t output_size);
++
++static const claw_cap_descriptor_t s_scheduler_descriptors[] = {
++    {
++        .id = "scheduler_list",
++        .name = "scheduler_list",
++        .family = "scheduler",
++        .description = "List all scheduler entries and runtime state.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\"}",
++        .execute = cap_scheduler_execute_list,
++    },
++    {
++        .id = "scheduler_get",
++        .name = "scheduler_get",
++        .family = "scheduler",
++        .description = "Get one scheduler entry by id.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
++        .execute = cap_scheduler_execute_get,
++    },
++    {
++        .id = "scheduler_enable",
++        .name = "scheduler_enable",
++        .family = "scheduler",
++        .description = "Enable one scheduler entry by id.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
++        .execute = cap_scheduler_execute_enable,
++    },
++    {
++        .id = "scheduler_disable",
++        .name = "scheduler_disable",
++        .family = "scheduler",
++        .description = "Disable one scheduler entry by id.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
++        .execute = cap_scheduler_execute_disable,
++    },
++    {
++        .id = "scheduler_pause",
++        .name = "scheduler_pause",
++        .family = "scheduler",
++        .description = "Pause one scheduler entry by id.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
++        .execute = cap_scheduler_execute_pause,
++    },
++    {
++        .id = "scheduler_resume",
++        .name = "scheduler_resume",
++        .family = "scheduler",
++        .description = "Resume one scheduler entry by id.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
++        .execute = cap_scheduler_execute_resume,
++    },
++    {
++        .id = "scheduler_trigger_now",
++        .name = "scheduler_trigger_now",
++        .family = "scheduler",
++        .description = "Trigger one scheduler entry immediately.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
++        .execute = cap_scheduler_execute_trigger,
++    },
++    {
++        .id = "scheduler_reload",
++        .name = "scheduler_reload",
++        .family = "scheduler",
++        .description = "Reload scheduler definitions from disk.",
++        .kind = CLAW_CAP_KIND_HYBRID,
++        .input_schema_json = "{\"type\":\"object\"}",
++        .execute = cap_scheduler_execute_reload,
++    },
++};
++
++static const claw_cap_group_t s_scheduler_group = {
++    .group_id = "cap_scheduler",
++    .descriptors = s_scheduler_descriptors,
++    .descriptor_count = sizeof(s_scheduler_descriptors) / sizeof(s_scheduler_descriptors[0]),
++};
++
++static bool cap_scheduler_parse_session_policy_local(const char *value,
++                                                     claw_event_session_policy_t *out_policy)
++{
++    if (!out_policy) {
++        return false;
++    }
++    if (!value || !value[0] || strcmp(value, "trigger") == 0) {
++        *out_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
++        return true;
++    }
++    if (strcmp(value, "chat") == 0) {
++        *out_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
++        return true;
++    }
++    if (strcmp(value, "global") == 0) {
++        *out_policy = CLAW_EVENT_SESSION_POLICY_GLOBAL;
++        return true;
++    }
++    if (strcmp(value, "ephemeral") == 0) {
++        *out_policy = CLAW_EVENT_SESSION_POLICY_EPHEMERAL;
++        return true;
++    }
++    if (strcmp(value, "nosave") == 0) {
++        *out_policy = CLAW_EVENT_SESSION_POLICY_NOSAVE;
++        return true;
++    }
++    return false;
++}
++
++static void cap_scheduler_lock(void)
++{
++    xSemaphoreTakeRecursive(s_cap_scheduler.mutex, portMAX_DELAY);
++}
++
++static void cap_scheduler_unlock(void)
++{
++    xSemaphoreGiveRecursive(s_cap_scheduler.mutex);
++}
++
++static size_t cap_scheduler_active_count_locked(void)
++{
++    size_t count = 0;
++
++    for (size_t i = 0; i < s_cap_scheduler.max_items; i++) {
++        if (s_cap_scheduler.entries[i].occupied) {
++            count++;
++        }
++    }
++    return count;
++}
++
++static ssize_t cap_scheduler_find_entry_index_locked(const char *id)
++{
++    if (!id || !id[0]) {
++        return -1;
++    }
++
++    for (size_t i = 0; i < s_cap_scheduler.max_items; i++) {
++        if (s_cap_scheduler.entries[i].occupied &&
++            strcmp(s_cap_scheduler.entries[i].item.id, id) == 0) {
++            return (ssize_t)i;
++        }
++    }
++    return -1;
++}
++
++static ssize_t cap_scheduler_find_free_index_locked(void)
++{
++    for (size_t i = 0; i < s_cap_scheduler.max_items; i++) {
++        if (!s_cap_scheduler.entries[i].occupied) {
++            return (ssize_t)i;
++        }
++    }
++    return -1;
++}
++
++static esp_err_t cap_scheduler_persist_locked(void)
++{
++    ESP_RETURN_ON_ERROR(cap_scheduler_save_items(s_cap_scheduler.schedules_path,
++                                                 s_cap_scheduler.entries,
++                                                 s_cap_scheduler.max_items),
++                        TAG,
++                        "Failed to save scheduler definitions");
++    return cap_scheduler_save_state(s_cap_scheduler.state_path,
++                                    s_cap_scheduler.entries,
++                                    s_cap_scheduler.max_items);
++}
++
++static esp_err_t cap_scheduler_refresh_entry_locked(cap_scheduler_entry_t *entry, int64_t now_ms)
++{
++    esp_err_t err;
++
++    if (!entry || !entry->occupied) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    if (!entry->item.enabled) {
++        entry->status = CAP_SCHEDULER_STATUS_DISABLED;
++        entry->next_fire_ms = -1;
++        return ESP_OK;
++    }
++    if (entry->status == CAP_SCHEDULER_STATUS_PAUSED) {
++        return ESP_OK;
++    }
++
++    err = cap_scheduler_compute_next_fire(&entry->item,
++                                          now_ms,
++                                          entry->run_count,
++                                          &entry->next_fire_ms);
++    if (err != ESP_OK) {
++        entry->status = CAP_SCHEDULER_STATUS_ERROR;
++        entry->last_error_code = err;
++        return err;
++    }
++    if (entry->next_fire_ms < 0) {
++        entry->status = CAP_SCHEDULER_STATUS_COMPLETED;
++    } else {
++        entry->status = CAP_SCHEDULER_STATUS_SCHEDULED;
++    }
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_build_payload_json(const cap_scheduler_entry_t *entry,
++                                                  int64_t planned_time_ms,
++                                                  int64_t fire_time_ms,
++                                                  char *buf,
++                                                  size_t buf_size)
++{
++    cJSON *root = NULL;
++    cJSON *user_payload = NULL;
++    char *rendered = NULL;
++
++    if (!entry || !buf || buf_size == 0) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    root = cJSON_CreateObject();
++    if (!root) {
++        return ESP_ERR_NO_MEM;
++    }
++    cJSON_AddStringToObject(root, "schedule_id", entry->item.id);
++    cJSON_AddNumberToObject(root, "planned_time_ms", (double)planned_time_ms);
++    cJSON_AddNumberToObject(root, "fire_time_ms", (double)fire_time_ms);
++    cJSON_AddStringToObject(root, "kind",
++                            entry->item.kind == CAP_SCHEDULER_ITEM_ONCE ? "once" :
++                            entry->item.kind == CAP_SCHEDULER_ITEM_INTERVAL ? "interval" : "cron");
++    cJSON_AddNumberToObject(root, "run_count", entry->run_count + 1);
++    cJSON_AddStringToObject(root, "catch_up",
++                            entry->item.catch_up_policy == CAP_SCHEDULER_CATCH_UP_FIRE_ONCE ? "fire_once" : "skip");
++
++    user_payload = cJSON_Parse(entry->item.payload_json[0] ? entry->item.payload_json : "{}");
++    if (!user_payload) {
++        user_payload = cJSON_CreateObject();
++    }
++    cJSON_AddItemToObject(root, "user_payload", user_payload);
++
++    rendered = cJSON_PrintUnformatted(root);
++    cJSON_Delete(root);
++    if (!rendered) {
++        return ESP_ERR_NO_MEM;
++    }
++
++    strlcpy(buf, rendered, buf_size);
++    free(rendered);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_publish_entry_locked(cap_scheduler_entry_t *entry,
++                                                    bool immediate,
++                                                    int64_t now_ms)
++{
++    claw_event_t event = {0};
++    char payload_json[CAP_SCHEDULER_PAYLOAD_LEN] = {0};
++    esp_err_t err;
++    int64_t planned_time_ms;
++
++    if (!entry || !entry->occupied) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    if (!s_cap_scheduler.config.publish_event) {
++        return ESP_ERR_INVALID_STATE;
++    }
++
++    planned_time_ms = immediate ? now_ms : entry->next_fire_ms;
++    if (planned_time_ms <= 0) {
++        planned_time_ms = now_ms;
++    }
++
++    ESP_RETURN_ON_ERROR(cap_scheduler_build_payload_json(entry,
++                                                         planned_time_ms,
++                                                         now_ms,
++                                                         payload_json,
++                                                         sizeof(payload_json)),
++                        TAG,
++                        "Failed to build schedule payload");
++
++    snprintf(event.event_id, sizeof(event.event_id), "sch-%08" PRIx32,
++             (uint32_t)(now_ms & 0xffffffffU));
++    strlcpy(event.source_cap, "cap_scheduler", sizeof(event.source_cap));
++    strlcpy(event.event_type, entry->item.event_type, sizeof(event.event_type));
++    strlcpy(event.source_channel, entry->item.source_channel, sizeof(event.source_channel));
++    strlcpy(event.chat_id, entry->item.chat_id, sizeof(event.chat_id));
++    strlcpy(event.message_id, entry->item.event_key, sizeof(event.message_id));
++    snprintf(event.correlation_id, sizeof(event.correlation_id), "%s:%" PRId64, entry->item.id, planned_time_ms);
++    strlcpy(event.content_type, entry->item.content_type, sizeof(event.content_type));
++    event.timestamp_ms = now_ms;
++    event.text = entry->item.text[0] ? entry->item.text : NULL;
++    event.payload_json = payload_json;
++    if (!cap_scheduler_parse_session_policy_local(entry->item.session_policy, &event.session_policy)) {
++        event.session_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
++    }
++
++    entry->status = CAP_SCHEDULER_STATUS_RUNNING;
++    err = s_cap_scheduler.config.publish_event(&event);
++    entry->last_fire_ms = now_ms;
++    entry->last_error_code = err;
++    if (err == ESP_OK) {
++        entry->last_success_ms = now_ms;
++        entry->run_count++;
++    }
++
++    if (err == ESP_OK && entry->item.kind == CAP_SCHEDULER_ITEM_ONCE) {
++        entry->next_fire_ms = -1;
++        entry->status = CAP_SCHEDULER_STATUS_COMPLETED;
++    } else if (err == ESP_OK && entry->status != CAP_SCHEDULER_STATUS_PAUSED) {
++        if (!immediate) {
++            err = cap_scheduler_refresh_entry_locked(entry, planned_time_ms);
++        } else {
++            err = cap_scheduler_refresh_entry_locked(entry, now_ms);
++        }
++    } else if (err != ESP_OK) {
++        entry->status = CAP_SCHEDULER_STATUS_ERROR;
++    }
++
++    return err;
++}
++
++static esp_err_t cap_scheduler_fire_due_entries(void)
++{
++    esp_err_t overall = ESP_OK;
++    int64_t now_ms = cap_scheduler_now_ms();
++
++    cap_scheduler_lock();
++    for (size_t i = 0; i < s_cap_scheduler.max_items; i++) {
++        cap_scheduler_entry_t *entry = &s_cap_scheduler.entries[i];
++
++        if (!entry->occupied || !entry->item.enabled || entry->status == CAP_SCHEDULER_STATUS_PAUSED) {
++            continue;
++        }
++        if (entry->next_fire_ms <= 0 || entry->next_fire_ms > now_ms) {
++            continue;
++        }
++        if (entry->item.catch_up_policy == CAP_SCHEDULER_CATCH_UP_SKIP &&
++            now_ms > entry->next_fire_ms + (int64_t)s_cap_scheduler.config.tick_ms) {
++            entry->missed_count++;
++            if (cap_scheduler_refresh_entry_locked(entry, now_ms) != ESP_OK) {
++                overall = ESP_FAIL;
++            }
++            continue;
++        }
++        if (cap_scheduler_publish_entry_locked(entry, false, now_ms) != ESP_OK) {
++            overall = ESP_FAIL;
++        }
++    }
++    if (s_cap_scheduler.config.persist_after_fire) {
++        cap_scheduler_save_state(s_cap_scheduler.state_path,
++                                 s_cap_scheduler.entries,
++                                 s_cap_scheduler.max_items);
++    }
++    cap_scheduler_unlock();
++    return overall;
++}
++
++static void cap_scheduler_task(void *arg)
++{
++    (void)arg;
++
++    ESP_LOGI(TAG, "scheduler task started");
++    while (!s_cap_scheduler.stop_requested) {
++        cap_scheduler_fire_due_entries();
++        vTaskDelay(pdMS_TO_TICKS(s_cap_scheduler.config.tick_ms));
++    }
++    s_cap_scheduler.started = false;
++    s_cap_scheduler.task_handle = NULL;
++    vTaskDelete(NULL);
++}
++
++static esp_err_t cap_scheduler_load_from_disk_locked(void)
++{
++    cap_scheduler_item_t *items = NULL;
++    size_t item_count = 0;
++    int64_t now_ms = cap_scheduler_now_ms();
++    esp_err_t err;
++
++    items = calloc(s_cap_scheduler.max_items, sizeof(cap_scheduler_item_t));
++    if (!items) {
++        return ESP_ERR_NO_MEM;
++    }
++
++    err = cap_scheduler_load_items(s_cap_scheduler.schedules_path,
++                                   items,
++                                   s_cap_scheduler.max_items,
++                                   &item_count,
++                                   s_cap_scheduler.default_timezone);
++    if (err != ESP_OK) {
++        ESP_LOGE(TAG, "Failed to load schedules from %s: %s",
++                 s_cap_scheduler.schedules_path,
++                 esp_err_to_name(err));
++        free(items);
++        return err;
++    }
++
++    memset(s_cap_scheduler.entries, 0, s_cap_scheduler.max_items * sizeof(cap_scheduler_entry_t));
++    for (size_t i = 0; i < item_count; i++) {
++        s_cap_scheduler.entries[i].occupied = true;
++        s_cap_scheduler.entries[i].item = items[i];
++        s_cap_scheduler.entries[i].status = items[i].enabled ?
++            CAP_SCHEDULER_STATUS_SCHEDULED : CAP_SCHEDULER_STATUS_DISABLED;
++        s_cap_scheduler.entries[i].next_fire_ms = -1;
++    }
++    s_cap_scheduler.item_count = item_count;
++    free(items);
++
++    err = cap_scheduler_load_state(s_cap_scheduler.state_path,
++                                   s_cap_scheduler.entries,
++                                   s_cap_scheduler.max_items);
++    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
++        ESP_LOGW(TAG, "Failed to load scheduler state from %s: %s",
++                 s_cap_scheduler.state_path,
++                 esp_err_to_name(err));
++        return err;
++    }
++
++    for (size_t i = 0; i < s_cap_scheduler.max_items; i++) {
++        if (!s_cap_scheduler.entries[i].occupied) {
++            continue;
++        }
++        if (s_cap_scheduler.entries[i].status == CAP_SCHEDULER_STATUS_PAUSED) {
++            continue;
++        }
++        err = cap_scheduler_refresh_entry_locked(&s_cap_scheduler.entries[i],
++                                                 s_cap_scheduler.entries[i].last_fire_ms > 0 ?
++                                                     s_cap_scheduler.entries[i].last_fire_ms : now_ms);
++        if (err != ESP_OK) {
++            ESP_LOGW(TAG, "Failed to refresh schedule %s: %s",
++                     s_cap_scheduler.entries[i].item.id,
++                     esp_err_to_name(err));
++        }
++    }
++    err = cap_scheduler_save_state(s_cap_scheduler.state_path,
++                                   s_cap_scheduler.entries,
++                                   s_cap_scheduler.max_items);
++    if (err != ESP_OK) {
++        ESP_LOGW(TAG, "Failed to save initial scheduler state to %s: %s",
++                 s_cap_scheduler.state_path,
++                 esp_err_to_name(err));
++        return ESP_OK;
++    }
++
++    ESP_LOGI(TAG, "Loaded %u scheduler entries from %s",
++             (unsigned)item_count,
++             s_cap_scheduler.schedules_path);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_parse_id_input(const char *input_json, char *id, size_t id_size)
++{
++    cJSON *root = NULL;
++    cJSON *id_item = NULL;
++
++    if (!id || id_size == 0) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    root = cJSON_Parse(input_json ? input_json : "{}");
++    id_item = root ? cJSON_GetObjectItemCaseSensitive(root, "id") : NULL;
++    if (!cJSON_IsString(id_item) || !id_item->valuestring || !id_item->valuestring[0]) {
++        cJSON_Delete(root);
++        return ESP_ERR_INVALID_ARG;
++    }
++    strlcpy(id, id_item->valuestring, id_size);
++    cJSON_Delete(root);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_write_snapshot_json(const cap_scheduler_snapshot_t *snapshot,
++                                                   char *output,
++                                                   size_t output_size)
++{
++    cap_scheduler_entry_t entry = {0};
++    cJSON *root = NULL;
++    char *rendered = NULL;
++    esp_err_t err;
++
++    if (!snapshot || !output || output_size == 0) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    entry.occupied = true;
++    entry.item = snapshot->item;
++    entry.status = snapshot->status;
++    entry.next_fire_ms = snapshot->next_fire_ms;
++    entry.last_fire_ms = snapshot->last_fire_ms;
++    entry.last_success_ms = snapshot->last_success_ms;
++    entry.run_count = snapshot->run_count;
++    entry.missed_count = snapshot->missed_count;
++    entry.last_error_code = snapshot->last_error_code;
++    err = cap_scheduler_entry_to_json(&entry, true, &root);
++    if (err != ESP_OK) {
++        return err;
++    }
++    rendered = cJSON_PrintUnformatted(root);
++    cJSON_Delete(root);
++    if (!rendered) {
++        return ESP_ERR_NO_MEM;
++    }
++    strlcpy(output, rendered, output_size);
++    free(rendered);
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_register_group(void)
++{
++    if (claw_cap_group_exists(s_scheduler_group.group_id)) {
++        return ESP_OK;
++    }
++    return claw_cap_register_group(&s_scheduler_group);
++}
++
++esp_err_t cap_scheduler_init(const cap_scheduler_config_t *config)
++{
++    if (s_cap_scheduler.initialized) {
++        return ESP_ERR_INVALID_STATE;
++    }
++
++    if (!s_cap_scheduler.mutex) {
++        s_cap_scheduler.mutex = xSemaphoreCreateRecursiveMutex();
++    }
++    if (!s_cap_scheduler.mutex) {
++        return ESP_ERR_NO_MEM;
++    }
++
++    memset(&s_cap_scheduler.config, 0, sizeof(s_cap_scheduler.config));
++    if (config) {
++        s_cap_scheduler.config = *config;
++    }
++
++    s_cap_scheduler.config.tick_ms = s_cap_scheduler.config.tick_ms ?
++        s_cap_scheduler.config.tick_ms : CAP_SCHEDULER_DEFAULT_TICK_MS;
++    s_cap_scheduler.config.max_items = s_cap_scheduler.config.max_items ?
++        s_cap_scheduler.config.max_items : CAP_SCHEDULER_DEFAULT_MAX_ITEMS;
++    s_cap_scheduler.config.task_stack_size = s_cap_scheduler.config.task_stack_size ?
++        s_cap_scheduler.config.task_stack_size : CAP_SCHEDULER_DEFAULT_STACK;
++    s_cap_scheduler.config.task_priority = s_cap_scheduler.config.task_priority ?
++        s_cap_scheduler.config.task_priority : CAP_SCHEDULER_DEFAULT_PRIORITY;
++    s_cap_scheduler.config.task_core = config ? config->task_core : tskNO_AFFINITY;
++    s_cap_scheduler.config.persist_after_fire = true;
++
++    strlcpy(s_cap_scheduler.schedules_path,
++            config && config->schedules_path ? config->schedules_path : CAP_SCHEDULER_DEFAULT_SCHEDULES_PATH,
++            sizeof(s_cap_scheduler.schedules_path));
++    strlcpy(s_cap_scheduler.state_path,
++            config && config->state_path ? config->state_path : CAP_SCHEDULER_DEFAULT_STATE_PATH,
++            sizeof(s_cap_scheduler.state_path));
++    strlcpy(s_cap_scheduler.default_timezone,
++            config && config->default_timezone ? config->default_timezone : CAP_SCHEDULER_DEFAULT_TIMEZONE,
++            sizeof(s_cap_scheduler.default_timezone));
++
++    s_cap_scheduler.max_items = s_cap_scheduler.config.max_items;
++    s_cap_scheduler.entries = calloc(s_cap_scheduler.max_items, sizeof(cap_scheduler_entry_t));
++    if (!s_cap_scheduler.entries) {
++        return ESP_ERR_NO_MEM;
++    }
++    s_cap_scheduler.initialized = true;
++
++    cap_scheduler_lock();
++    {
++        esp_err_t err = cap_scheduler_load_from_disk_locked();
++
++        if (err != ESP_OK) {
++            ESP_LOGE(TAG, "Scheduler init load failed: %s", esp_err_to_name(err));
++            cap_scheduler_unlock();
++            return err;
++        }
++    }
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_start(void)
++{
++    BaseType_t ok;
++
++    if (!s_cap_scheduler.initialized) {
++        return ESP_ERR_INVALID_STATE;
++    }
++    if (s_cap_scheduler.started) {
++        return ESP_OK;
++    }
++
++    s_cap_scheduler.stop_requested = false;
++    if (s_cap_scheduler.config.task_core == tskNO_AFFINITY) {
++        ok = xTaskCreate(cap_scheduler_task,
++                         "cap_scheduler",
++                         s_cap_scheduler.config.task_stack_size,
++                         NULL,
++                         s_cap_scheduler.config.task_priority,
++                         &s_cap_scheduler.task_handle);
++    } else {
++        ok = xTaskCreatePinnedToCore(cap_scheduler_task,
++                                     "cap_scheduler",
++                                     s_cap_scheduler.config.task_stack_size,
++                                     NULL,
++                                     s_cap_scheduler.config.task_priority,
++                                     &s_cap_scheduler.task_handle,
++                                     s_cap_scheduler.config.task_core);
++    }
++    if (ok != pdPASS) {
++        s_cap_scheduler.task_handle = NULL;
++        return ESP_FAIL;
++    }
++    s_cap_scheduler.started = true;
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_stop(void)
++{
++    if (!s_cap_scheduler.started || !s_cap_scheduler.task_handle) {
++        return ESP_OK;
++    }
++    s_cap_scheduler.stop_requested = true;
++    while (s_cap_scheduler.task_handle) {
++        vTaskDelay(pdMS_TO_TICKS(20));
++    }
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_reload(void)
++{
++    esp_err_t err;
++
++    if (!s_cap_scheduler.initialized) {
++        return ESP_ERR_INVALID_STATE;
++    }
++    cap_scheduler_lock();
++    err = cap_scheduler_load_from_disk_locked();
++    cap_scheduler_unlock();
++    return err;
++}
++
++esp_err_t cap_scheduler_add(const cap_scheduler_item_t *item)
++{
++    ssize_t index;
++    int64_t now_ms = cap_scheduler_now_ms();
++
++    if (!s_cap_scheduler.initialized || !item) {
++        return ESP_ERR_INVALID_STATE;
++    }
++    if (cap_scheduler_validate_item(item) != ESP_OK) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    cap_scheduler_lock();
++    if (cap_scheduler_find_entry_index_locked(item->id) >= 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_INVALID_STATE;
++    }
++    index = cap_scheduler_find_free_index_locked();
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NO_MEM;
++    }
++    memset(&s_cap_scheduler.entries[index], 0, sizeof(s_cap_scheduler.entries[index]));
++    s_cap_scheduler.entries[index].occupied = true;
++    s_cap_scheduler.entries[index].item = *item;
++    cap_scheduler_apply_defaults(&s_cap_scheduler.entries[index].item, s_cap_scheduler.default_timezone);
++    s_cap_scheduler.entries[index].status = item->enabled ?
++        CAP_SCHEDULER_STATUS_SCHEDULED : CAP_SCHEDULER_STATUS_DISABLED;
++    cap_scheduler_refresh_entry_locked(&s_cap_scheduler.entries[index], now_ms);
++    s_cap_scheduler.item_count = cap_scheduler_active_count_locked();
++    cap_scheduler_persist_locked();
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_update(const cap_scheduler_item_t *item)
++{
++    ssize_t index;
++    int64_t now_ms = cap_scheduler_now_ms();
++
++    if (!s_cap_scheduler.initialized || !item) {
++        return ESP_ERR_INVALID_STATE;
++    }
++    if (cap_scheduler_validate_item(item) != ESP_OK) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    cap_scheduler_lock();
++    index = cap_scheduler_find_entry_index_locked(item->id);
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NOT_FOUND;
++    }
++    s_cap_scheduler.entries[index].item = *item;
++    cap_scheduler_apply_defaults(&s_cap_scheduler.entries[index].item, s_cap_scheduler.default_timezone);
++    if (s_cap_scheduler.entries[index].status != CAP_SCHEDULER_STATUS_PAUSED) {
++        cap_scheduler_refresh_entry_locked(&s_cap_scheduler.entries[index], now_ms);
++    }
++    cap_scheduler_persist_locked();
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_remove(const char *id)
++{
++    ssize_t index;
++
++    if (!s_cap_scheduler.initialized || !id || !id[0]) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    cap_scheduler_lock();
++    index = cap_scheduler_find_entry_index_locked(id);
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NOT_FOUND;
++    }
++    memset(&s_cap_scheduler.entries[index], 0, sizeof(s_cap_scheduler.entries[index]));
++    s_cap_scheduler.item_count = cap_scheduler_active_count_locked();
++    cap_scheduler_persist_locked();
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_enable(const char *id, bool enabled)
++{
++    ssize_t index;
++    int64_t now_ms = cap_scheduler_now_ms();
++
++    if (!s_cap_scheduler.initialized || !id || !id[0]) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    cap_scheduler_lock();
++    index = cap_scheduler_find_entry_index_locked(id);
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NOT_FOUND;
++    }
++    s_cap_scheduler.entries[index].item.enabled = enabled;
++    s_cap_scheduler.entries[index].status = enabled ?
++        CAP_SCHEDULER_STATUS_SCHEDULED : CAP_SCHEDULER_STATUS_DISABLED;
++    s_cap_scheduler.entries[index].last_error_code = ESP_OK;
++    cap_scheduler_refresh_entry_locked(&s_cap_scheduler.entries[index], now_ms);
++    cap_scheduler_persist_locked();
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_pause(const char *id)
++{
++    ssize_t index;
++
++    if (!s_cap_scheduler.initialized || !id || !id[0]) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    cap_scheduler_lock();
++    index = cap_scheduler_find_entry_index_locked(id);
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NOT_FOUND;
++    }
++    s_cap_scheduler.entries[index].status = CAP_SCHEDULER_STATUS_PAUSED;
++    cap_scheduler_persist_locked();
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_resume(const char *id)
++{
++    ssize_t index;
++    int64_t now_ms = cap_scheduler_now_ms();
++
++    if (!s_cap_scheduler.initialized || !id || !id[0]) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    cap_scheduler_lock();
++    index = cap_scheduler_find_entry_index_locked(id);
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NOT_FOUND;
++    }
++    cap_scheduler_refresh_entry_locked(&s_cap_scheduler.entries[index], now_ms);
++    cap_scheduler_persist_locked();
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_trigger_now(const char *id)
++{
++    ssize_t index;
++    esp_err_t err;
++
++    if (!s_cap_scheduler.initialized || !id || !id[0]) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    cap_scheduler_lock();
++    index = cap_scheduler_find_entry_index_locked(id);
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NOT_FOUND;
++    }
++    err = cap_scheduler_publish_entry_locked(&s_cap_scheduler.entries[index], true, cap_scheduler_now_ms());
++    cap_scheduler_persist_locked();
++    cap_scheduler_unlock();
++    return err;
++}
++
++esp_err_t cap_scheduler_get_snapshot(const char *id, cap_scheduler_snapshot_t *out)
++{
++    ssize_t index;
++
++    if (!s_cap_scheduler.initialized || !id || !id[0] || !out) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    cap_scheduler_lock();
++    index = cap_scheduler_find_entry_index_locked(id);
++    if (index < 0) {
++        cap_scheduler_unlock();
++        return ESP_ERR_NOT_FOUND;
++    }
++    memset(out, 0, sizeof(*out));
++    out->item = s_cap_scheduler.entries[index].item;
++    out->status = s_cap_scheduler.entries[index].status;
++    out->next_fire_ms = s_cap_scheduler.entries[index].next_fire_ms;
++    out->last_fire_ms = s_cap_scheduler.entries[index].last_fire_ms;
++    out->last_success_ms = s_cap_scheduler.entries[index].last_success_ms;
++    out->run_count = s_cap_scheduler.entries[index].run_count;
++    out->missed_count = s_cap_scheduler.entries[index].missed_count;
++    out->last_error_code = s_cap_scheduler.entries[index].last_error_code;
++    cap_scheduler_unlock();
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_list_json(char *buf, size_t size)
++{
++    cJSON *root = NULL;
++    char *rendered = NULL;
++
++    if (!s_cap_scheduler.initialized || !buf || size == 0) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    root = cJSON_CreateArray();
++    if (!root) {
++        return ESP_ERR_NO_MEM;
++    }
++
++    cap_scheduler_lock();
++    for (size_t i = 0; i < s_cap_scheduler.max_items; i++) {
++        cJSON *obj = NULL;
++
++        if (!s_cap_scheduler.entries[i].occupied) {
++            continue;
++        }
++        if (cap_scheduler_entry_to_json(&s_cap_scheduler.entries[i], true, &obj) == ESP_OK) {
++            cJSON_AddItemToArray(root, obj);
++        }
++    }
++    cap_scheduler_unlock();
++
++    rendered = cJSON_PrintUnformatted(root);
++    cJSON_Delete(root);
++    if (!rendered) {
++        return ESP_ERR_NO_MEM;
++    }
++    strlcpy(buf, rendered, size);
++    free(rendered);
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_get_state_json(const char *id, char *buf, size_t size)
++{
++    cap_scheduler_snapshot_t snapshot = {0};
++    ESP_RETURN_ON_ERROR(cap_scheduler_get_snapshot(id, &snapshot), TAG, "snapshot not found");
++    return cap_scheduler_write_snapshot_json(&snapshot, buf, size);
++}
++
++static esp_err_t cap_scheduler_execute_list(const char *input_json,
++                                            const claw_cap_call_context_t *ctx,
++                                            char *output,
++                                            size_t output_size)
++{
++    (void)input_json;
++    (void)ctx;
++    return cap_scheduler_list_json(output, output_size);
++}
++
++static esp_err_t cap_scheduler_execute_get(const char *input_json,
++                                           const claw_cap_call_context_t *ctx,
++                                           char *output,
++                                           size_t output_size)
++{
++    char id[CAP_SCHEDULER_ID_LEN] = {0};
++
++    (void)ctx;
++    ESP_RETURN_ON_ERROR(cap_scheduler_parse_id_input(input_json, id, sizeof(id)),
++                        TAG,
++                        "scheduler id required");
++    return cap_scheduler_get_state_json(id, output, output_size);
++}
++
++static esp_err_t cap_scheduler_execute_enable(const char *input_json,
++                                              const claw_cap_call_context_t *ctx,
++                                              char *output,
++                                              size_t output_size)
++{
++    char id[CAP_SCHEDULER_ID_LEN] = {0};
++
++    (void)ctx;
++    ESP_RETURN_ON_ERROR(cap_scheduler_parse_id_input(input_json, id, sizeof(id)), TAG, "id required");
++    ESP_RETURN_ON_ERROR(cap_scheduler_enable(id, true), TAG, "enable failed");
++    snprintf(output, output_size, "{\"ok\":true,\"id\":\"%s\",\"enabled\":true}", id);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_execute_disable(const char *input_json,
++                                               const claw_cap_call_context_t *ctx,
++                                               char *output,
++                                               size_t output_size)
++{
++    char id[CAP_SCHEDULER_ID_LEN] = {0};
++
++    (void)ctx;
++    ESP_RETURN_ON_ERROR(cap_scheduler_parse_id_input(input_json, id, sizeof(id)), TAG, "id required");
++    ESP_RETURN_ON_ERROR(cap_scheduler_enable(id, false), TAG, "disable failed");
++    snprintf(output, output_size, "{\"ok\":true,\"id\":\"%s\",\"enabled\":false}", id);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_execute_pause(const char *input_json,
++                                             const claw_cap_call_context_t *ctx,
++                                             char *output,
++                                             size_t output_size)
++{
++    char id[CAP_SCHEDULER_ID_LEN] = {0};
++
++    (void)ctx;
++    ESP_RETURN_ON_ERROR(cap_scheduler_parse_id_input(input_json, id, sizeof(id)), TAG, "id required");
++    ESP_RETURN_ON_ERROR(cap_scheduler_pause(id), TAG, "pause failed");
++    snprintf(output, output_size, "{\"ok\":true,\"id\":\"%s\",\"status\":\"paused\"}", id);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_execute_resume(const char *input_json,
++                                              const claw_cap_call_context_t *ctx,
++                                              char *output,
++                                              size_t output_size)
++{
++    char id[CAP_SCHEDULER_ID_LEN] = {0};
++
++    (void)ctx;
++    ESP_RETURN_ON_ERROR(cap_scheduler_parse_id_input(input_json, id, sizeof(id)), TAG, "id required");
++    ESP_RETURN_ON_ERROR(cap_scheduler_resume(id), TAG, "resume failed");
++    snprintf(output, output_size, "{\"ok\":true,\"id\":\"%s\",\"status\":\"scheduled\"}", id);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_execute_trigger(const char *input_json,
++                                               const claw_cap_call_context_t *ctx,
++                                               char *output,
++                                               size_t output_size)
++{
++    char id[CAP_SCHEDULER_ID_LEN] = {0};
++
++    (void)ctx;
++    ESP_RETURN_ON_ERROR(cap_scheduler_parse_id_input(input_json, id, sizeof(id)), TAG, "id required");
++    ESP_RETURN_ON_ERROR(cap_scheduler_trigger_now(id), TAG, "trigger failed");
++    snprintf(output, output_size, "{\"ok\":true,\"id\":\"%s\",\"triggered\":true}", id);
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_execute_reload(const char *input_json,
++                                              const claw_cap_call_context_t *ctx,
++                                              char *output,
++                                              size_t output_size)
++{
++    (void)input_json;
++    (void)ctx;
++    ESP_RETURN_ON_ERROR(cap_scheduler_reload(), TAG, "reload failed");
++    snprintf(output, output_size, "{\"ok\":true}");
++    return ESP_OK;
++}
+diff --git a/components/cap_scheduler/src/cap_scheduler_internal.h b/components/cap_scheduler/src/cap_scheduler_internal.h
+new file mode 100644
+index 0000000..0b94f86
+--- /dev/null
++++ b/components/cap_scheduler/src/cap_scheduler_internal.h
+@@ -0,0 +1,74 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#include "cap_scheduler.h"
++#include "cJSON.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/semphr.h"
++#include "freertos/task.h"
++
++#define CAP_SCHEDULER_DEFAULT_SCHEDULES_PATH "/fatfs/data/scheduler/schedules.json"
++#define CAP_SCHEDULER_DEFAULT_STATE_PATH     "/fatfs/data/scheduler/scheduler_state.json"
++#define CAP_SCHEDULER_DEFAULT_TIMEZONE       "UTC0"
++#define CAP_SCHEDULER_DEFAULT_TICK_MS        1000
++#define CAP_SCHEDULER_DEFAULT_MAX_ITEMS      32
++#define CAP_SCHEDULER_DEFAULT_STACK          6144
++#define CAP_SCHEDULER_DEFAULT_PRIORITY       5
++
++typedef struct {
++    bool occupied;
++    cap_scheduler_item_t item;
++    cap_scheduler_status_t status;
++    int64_t next_fire_ms;
++    int64_t last_fire_ms;
++    int64_t last_success_ms;
++    int run_count;
++    int missed_count;
++    esp_err_t last_error_code;
++} cap_scheduler_entry_t;
++
++typedef struct {
++    bool initialized;
++    bool started;
++    bool stop_requested;
++    SemaphoreHandle_t mutex;
++    TaskHandle_t task_handle;
++    cap_scheduler_config_t config;
++    char schedules_path[192];
++    char state_path[192];
++    char default_timezone[CAP_SCHEDULER_TZ_LEN];
++    cap_scheduler_entry_t *entries;
++    size_t max_items;
++    size_t item_count;
++} cap_scheduler_runtime_t;
++
++extern cap_scheduler_runtime_t s_cap_scheduler;
++
++int64_t cap_scheduler_now_ms(void);
++void cap_scheduler_apply_defaults(cap_scheduler_item_t *item, const char *default_timezone);
++bool cap_scheduler_is_supported_timezone(const char *timezone);
++esp_err_t cap_scheduler_validate_item(const cap_scheduler_item_t *item);
++esp_err_t cap_scheduler_compute_next_fire(const cap_scheduler_item_t *item,
++                                          int64_t anchor_ms,
++                                          int run_count,
++                                          int64_t *out_next_fire_ms);
++esp_err_t cap_scheduler_load_items(const char *path,
++                                   cap_scheduler_item_t *items,
++                                   size_t max_items,
++                                   size_t *out_count,
++                                   const char *default_timezone);
++esp_err_t cap_scheduler_save_items(const char *path,
++                                   const cap_scheduler_entry_t *entries,
++                                   size_t entry_count);
++esp_err_t cap_scheduler_load_state(const char *path,
++                                   cap_scheduler_entry_t *entries,
++                                   size_t entry_count);
++esp_err_t cap_scheduler_save_state(const char *path,
++                                   const cap_scheduler_entry_t *entries,
++                                   size_t entry_count);
++esp_err_t cap_scheduler_entry_to_json(const cap_scheduler_entry_t *entry,
++                                      bool include_item,
++                                      cJSON **out_json);
+diff --git a/components/cap_scheduler/src/cap_scheduler_parser.c b/components/cap_scheduler/src/cap_scheduler_parser.c
+new file mode 100644
+index 0000000..fd81d19
+--- /dev/null
++++ b/components/cap_scheduler/src/cap_scheduler_parser.c
+@@ -0,0 +1,326 @@
++#include "cap_scheduler_internal.h"
++
++#include <ctype.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/time.h>
++#include <time.h>
++
++static bool cap_scheduler_parse_cron_field(const char *token,
++                                           int min_value,
++                                           int max_value,
++                                           bool *allowed)
++{
++    int value;
++    int step;
++
++    if (!token || !token[0] || !allowed) {
++        return false;
++    }
++
++    if (strcmp(token, "*") == 0) {
++        for (value = min_value; value <= max_value; value++) {
++            allowed[value] = true;
++        }
++        return true;
++    }
++
++    if (strncmp(token, "*/", 2) == 0) {
++        step = atoi(token + 2);
++        if (step <= 0) {
++            return false;
++        }
++        for (value = min_value; value <= max_value; value++) {
++            if (((value - min_value) % step) == 0) {
++                allowed[value] = true;
++            }
++        }
++        return true;
++    }
++
++    for (const char *p = token; *p; ++p) {
++        if (!isdigit((unsigned char)*p)) {
++            return false;
++        }
++    }
++
++    value = atoi(token);
++    if (value < min_value || value > max_value) {
++        return false;
++    }
++    allowed[value] = true;
++    return true;
++}
++
++typedef struct {
++    bool minute[60];
++    bool hour[24];
++    bool mday[32];
++    bool month[13];
++    bool wday[7];
++} cap_scheduler_cron_spec_t;
++
++static void cap_scheduler_with_timezone(const char *timezone,
++                                        void (*fn)(time_t seconds, struct tm *tm_info, void *user_ctx),
++                                        time_t seconds,
++                                        struct tm *tm_info,
++                                        void *user_ctx)
++{
++    const char *previous_tz = getenv("TZ");
++    char saved_tz[CAP_SCHEDULER_TZ_LEN] = {0};
++
++    if (previous_tz && previous_tz[0]) {
++        strlcpy(saved_tz, previous_tz, sizeof(saved_tz));
++    }
++    setenv("TZ", timezone && timezone[0] ? timezone : CAP_SCHEDULER_DEFAULT_TIMEZONE, 1);
++    tzset();
++    fn(seconds, tm_info, user_ctx);
++    if (saved_tz[0]) {
++        setenv("TZ", saved_tz, 1);
++    } else {
++        unsetenv("TZ");
++    }
++    tzset();
++}
++
++static void cap_scheduler_localtime_wrapper(time_t seconds, struct tm *tm_info, void *user_ctx)
++{
++    (void)user_ctx;
++    localtime_r(&seconds, tm_info);
++}
++
++static void cap_scheduler_timegm_wrapper(time_t seconds, struct tm *tm_info, void *user_ctx)
++{
++    time_t *out_epoch = (time_t *)user_ctx;
++
++    (void)seconds;
++    *out_epoch = mktime(tm_info);
++}
++
++static bool cap_scheduler_parse_cron_expr(const char *expr, cap_scheduler_cron_spec_t *out)
++{
++    char buf[CAP_SCHEDULER_EXPR_LEN];
++    char *save = NULL;
++    char *token = NULL;
++    const int mins[5][2] = {
++        {0, 59},
++        {0, 23},
++        {1, 31},
++        {1, 12},
++        {0, 6},
++    };
++    bool *fields[5] = {
++        out->minute,
++        out->hour,
++        out->mday,
++        out->month,
++        out->wday,
++    };
++    int index = 0;
++
++    if (!expr || !expr[0] || !out) {
++        return false;
++    }
++
++    memset(out, 0, sizeof(*out));
++    strlcpy(buf, expr, sizeof(buf));
++
++    token = strtok_r(buf, " \t", &save);
++    while (token && index < 5) {
++        if (!cap_scheduler_parse_cron_field(token, mins[index][0], mins[index][1], fields[index])) {
++            return false;
++        }
++        index++;
++        token = strtok_r(NULL, " \t", &save);
++    }
++
++    return index == 5 && token == NULL;
++}
++
++static int64_t cap_scheduler_timegm_ms(struct tm *tm_info)
++{
++    time_t epoch;
++
++    if (!tm_info) {
++        return -1;
++    }
++
++    cap_scheduler_with_timezone("UTC0", cap_scheduler_timegm_wrapper, 0, tm_info, &epoch);
++    if (epoch < 0) {
++        return -1;
++    }
++    return ((int64_t)epoch) * 1000LL;
++}
++
++static bool cap_scheduler_compute_next_cron_fire(const cap_scheduler_item_t *item,
++                                                 int64_t anchor_ms,
++                                                 int64_t *out_next_fire_ms)
++{
++    cap_scheduler_cron_spec_t spec;
++    int64_t candidate_ms;
++    int i;
++
++    if (!item || !out_next_fire_ms || !cap_scheduler_parse_cron_expr(item->cron_expr, &spec)) {
++        return false;
++    }
++
++    candidate_ms = (anchor_ms / 60000LL) * 60000LL + 60000LL;
++    for (i = 0; i < 525600; i++) {
++        time_t seconds = (time_t)(candidate_ms / 1000LL);
++        struct tm tm_info = {0};
++
++        cap_scheduler_with_timezone(item->timezone[0] ? item->timezone : CAP_SCHEDULER_DEFAULT_TIMEZONE,
++                                    cap_scheduler_localtime_wrapper,
++                                    seconds,
++                                    &tm_info,
++                                    NULL);
++
++        if (spec.minute[tm_info.tm_min] &&
++            spec.hour[tm_info.tm_hour] &&
++            spec.mday[tm_info.tm_mday] &&
++            spec.month[tm_info.tm_mon + 1] &&
++            spec.wday[tm_info.tm_wday]) {
++            tm_info.tm_sec = 0;
++            *out_next_fire_ms = cap_scheduler_timegm_ms(&tm_info);
++            return *out_next_fire_ms >= 0;
++        }
++        candidate_ms += 60000LL;
++    }
++
++    return false;
++}
++
++int64_t cap_scheduler_now_ms(void)
++{
++    struct timeval tv = {0};
++
++    gettimeofday(&tv, NULL);
++    return ((int64_t)tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
++}
++
++void cap_scheduler_apply_defaults(cap_scheduler_item_t *item, const char *default_timezone)
++{
++    if (!item) {
++        return;
++    }
++
++    if (!item->event_type[0]) {
++        strlcpy(item->event_type, "schedule", sizeof(item->event_type));
++    }
++    if (!item->source_channel[0]) {
++        strlcpy(item->source_channel, "time", sizeof(item->source_channel));
++    }
++    if (!item->content_type[0]) {
++        strlcpy(item->content_type, "trigger", sizeof(item->content_type));
++    }
++    if (!item->session_policy[0]) {
++        strlcpy(item->session_policy, "trigger", sizeof(item->session_policy));
++    }
++    if (!item->payload_json[0]) {
++        strlcpy(item->payload_json, "{}", sizeof(item->payload_json));
++    }
++    if (!item->timezone[0] && default_timezone && default_timezone[0]) {
++        strlcpy(item->timezone, default_timezone, sizeof(item->timezone));
++    }
++    if (!item->timezone[0]) {
++        strlcpy(item->timezone, CAP_SCHEDULER_DEFAULT_TIMEZONE, sizeof(item->timezone));
++    }
++    if (!item->event_key[0]) {
++        strlcpy(item->event_key, item->id, sizeof(item->event_key));
++    }
++}
++
++bool cap_scheduler_is_supported_timezone(const char *timezone)
++{
++    if (!timezone || !timezone[0]) {
++        return false;
++    }
++
++    return true;
++}
++
++esp_err_t cap_scheduler_validate_item(const cap_scheduler_item_t *item)
++{
++    if (!item || !item->id[0] || !item->event_key[0] || !item->event_type[0]) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    if (!cap_scheduler_is_supported_timezone(item->timezone)) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    switch (item->kind) {
++    case CAP_SCHEDULER_ITEM_ONCE:
++        if (item->start_at_ms <= 0) {
++            return ESP_ERR_INVALID_ARG;
++        }
++        break;
++    case CAP_SCHEDULER_ITEM_INTERVAL:
++        if (item->interval_ms <= 0) {
++            return ESP_ERR_INVALID_ARG;
++        }
++        break;
++    case CAP_SCHEDULER_ITEM_CRON:
++        if (!item->cron_expr[0]) {
++            return ESP_ERR_INVALID_ARG;
++        }
++        break;
++    default:
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_compute_next_fire(const cap_scheduler_item_t *item,
++                                          int64_t anchor_ms,
++                                          int run_count,
++                                          int64_t *out_next_fire_ms)
++{
++    int64_t next_fire_ms = -1;
++
++    if (!item || !out_next_fire_ms) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    if (!item->enabled) {
++        *out_next_fire_ms = -1;
++        return ESP_OK;
++    }
++    if (item->max_runs > 0 && run_count >= item->max_runs) {
++        *out_next_fire_ms = -1;
++        return ESP_OK;
++    }
++
++    switch (item->kind) {
++    case CAP_SCHEDULER_ITEM_ONCE:
++        next_fire_ms = item->start_at_ms;
++        if (anchor_ms >= next_fire_ms) {
++            next_fire_ms = -1;
++        }
++        break;
++    case CAP_SCHEDULER_ITEM_INTERVAL:
++        if (item->start_at_ms > 0) {
++            next_fire_ms = item->start_at_ms;
++            while (next_fire_ms <= anchor_ms) {
++                next_fire_ms += item->interval_ms;
++            }
++        } else {
++            next_fire_ms = anchor_ms + item->interval_ms;
++        }
++        break;
++    case CAP_SCHEDULER_ITEM_CRON:
++        if (!cap_scheduler_compute_next_cron_fire(item, anchor_ms, &next_fire_ms)) {
++            return ESP_FAIL;
++        }
++        break;
++    default:
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    if (next_fire_ms > 0 && item->end_at_ms > 0 && next_fire_ms > item->end_at_ms) {
++        next_fire_ms = -1;
++    }
++
++    *out_next_fire_ms = next_fire_ms;
++    return ESP_OK;
++}
+diff --git a/components/cap_scheduler/src/cap_scheduler_store.c b/components/cap_scheduler/src/cap_scheduler_store.c
+new file mode 100644
+index 0000000..3f3eee1
+--- /dev/null
++++ b/components/cap_scheduler/src/cap_scheduler_store.c
+@@ -0,0 +1,538 @@
++#include "cap_scheduler_internal.h"
++
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++
++static esp_err_t cap_scheduler_read_file(const char *path, char **out_buf)
++{
++    FILE *file = NULL;
++    long file_size;
++    char *buf = NULL;
++
++    if (!path || !out_buf) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    file = fopen(path, "rb");
++    if (!file) {
++        return errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
++    }
++
++    if (fseek(file, 0, SEEK_END) != 0) {
++        fclose(file);
++        return ESP_FAIL;
++    }
++    file_size = ftell(file);
++    if (file_size < 0) {
++        fclose(file);
++        return ESP_FAIL;
++    }
++    rewind(file);
++
++    buf = calloc(1, (size_t)file_size + 1);
++    if (!buf) {
++        fclose(file);
++        return ESP_ERR_NO_MEM;
++    }
++    if (file_size > 0 && fread(buf, 1, (size_t)file_size, file) != (size_t)file_size) {
++        fclose(file);
++        free(buf);
++        return ESP_FAIL;
++    }
++
++    fclose(file);
++    *out_buf = buf;
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_ensure_parent_dir(const char *path)
++{
++    char buf[256];
++    size_t len;
++
++    if (!path || !path[0]) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    strlcpy(buf, path, sizeof(buf));
++    len = strlen(buf);
++    for (size_t i = 1; i < len; i++) {
++        if (buf[i] != '/') {
++            continue;
++        }
++        buf[i] = '\0';
++        if (mkdir(buf, 0755) != 0 && errno != EEXIST) {
++            return ESP_FAIL;
++        }
++        buf[i] = '/';
++    }
++    return ESP_OK;
++}
++
++static esp_err_t cap_scheduler_write_file(const char *path, const char *content)
++{
++    FILE *file = NULL;
++
++    if (!path || !content) {
++        return ESP_ERR_INVALID_ARG;
++    }
++    if (cap_scheduler_ensure_parent_dir(path) != ESP_OK) {
++        return ESP_FAIL;
++    }
++
++    file = fopen(path, "wb");
++    if (!file) {
++        return ESP_FAIL;
++    }
++    if (fwrite(content, 1, strlen(content), file) != strlen(content)) {
++        fclose(file);
++        return ESP_FAIL;
++    }
++    fclose(file);
++    return ESP_OK;
++}
++
++static const char *cap_scheduler_kind_to_string(cap_scheduler_item_kind_t kind)
++{
++    switch (kind) {
++    case CAP_SCHEDULER_ITEM_ONCE:
++        return "once";
++    case CAP_SCHEDULER_ITEM_INTERVAL:
++        return "interval";
++    case CAP_SCHEDULER_ITEM_CRON:
++        return "cron";
++    default:
++        return "unknown";
++    }
++}
++
++static bool cap_scheduler_kind_from_string(const char *value, cap_scheduler_item_kind_t *out)
++{
++    if (!value || !out) {
++        return false;
++    }
++    if (strcmp(value, "once") == 0) {
++        *out = CAP_SCHEDULER_ITEM_ONCE;
++        return true;
++    }
++    if (strcmp(value, "interval") == 0) {
++        *out = CAP_SCHEDULER_ITEM_INTERVAL;
++        return true;
++    }
++    if (strcmp(value, "cron") == 0) {
++        *out = CAP_SCHEDULER_ITEM_CRON;
++        return true;
++    }
++    return false;
++}
++
++static const char *cap_scheduler_status_to_string(cap_scheduler_status_t status)
++{
++    switch (status) {
++    case CAP_SCHEDULER_STATUS_SCHEDULED:
++        return "scheduled";
++    case CAP_SCHEDULER_STATUS_PAUSED:
++        return "paused";
++    case CAP_SCHEDULER_STATUS_RUNNING:
++        return "running";
++    case CAP_SCHEDULER_STATUS_COMPLETED:
++        return "completed";
++    case CAP_SCHEDULER_STATUS_ERROR:
++        return "error";
++    case CAP_SCHEDULER_STATUS_DISABLED:
++        return "disabled";
++    default:
++        return "unknown";
++    }
++}
++
++static bool cap_scheduler_status_from_string(const char *value, cap_scheduler_status_t *out)
++{
++    if (!value || !out) {
++        return false;
++    }
++    if (strcmp(value, "scheduled") == 0) {
++        *out = CAP_SCHEDULER_STATUS_SCHEDULED;
++        return true;
++    }
++    if (strcmp(value, "paused") == 0) {
++        *out = CAP_SCHEDULER_STATUS_PAUSED;
++        return true;
++    }
++    if (strcmp(value, "running") == 0) {
++        *out = CAP_SCHEDULER_STATUS_RUNNING;
++        return true;
++    }
++    if (strcmp(value, "completed") == 0) {
++        *out = CAP_SCHEDULER_STATUS_COMPLETED;
++        return true;
++    }
++    if (strcmp(value, "error") == 0) {
++        *out = CAP_SCHEDULER_STATUS_ERROR;
++        return true;
++    }
++    if (strcmp(value, "disabled") == 0) {
++        *out = CAP_SCHEDULER_STATUS_DISABLED;
++        return true;
++    }
++    return false;
++}
++
++static const char *cap_scheduler_catch_up_to_string(cap_scheduler_catch_up_policy_t policy)
++{
++    return policy == CAP_SCHEDULER_CATCH_UP_FIRE_ONCE ? "fire_once" : "skip";
++}
++
++static cap_scheduler_catch_up_policy_t cap_scheduler_catch_up_from_string(const char *value)
++{
++    if (value && strcmp(value, "fire_once") == 0) {
++        return CAP_SCHEDULER_CATCH_UP_FIRE_ONCE;
++    }
++    return CAP_SCHEDULER_CATCH_UP_SKIP;
++}
++
++static void cap_scheduler_parse_item_json(const cJSON *node,
++                                          cap_scheduler_item_t *item,
++                                          const char *default_timezone)
++{
++    const cJSON *value;
++
++    memset(item, 0, sizeof(*item));
++    item->enabled = true;
++    item->catch_up_policy = CAP_SCHEDULER_CATCH_UP_SKIP;
++
++    value = cJSON_GetObjectItemCaseSensitive(node, "id");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->id, value->valuestring, sizeof(item->id));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "enabled");
++    if (cJSON_IsBool(value)) {
++        item->enabled = cJSON_IsTrue(value);
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "kind");
++    if (cJSON_IsString(value)) {
++        cap_scheduler_kind_from_string(value->valuestring, &item->kind);
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "timezone");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->timezone, value->valuestring, sizeof(item->timezone));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "start_at_ms");
++    if (cJSON_IsNumber(value)) {
++        item->start_at_ms = (int64_t)value->valuedouble;
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "end_at_ms");
++    if (cJSON_IsNumber(value)) {
++        item->end_at_ms = (int64_t)value->valuedouble;
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "interval_ms");
++    if (cJSON_IsNumber(value)) {
++        item->interval_ms = (int64_t)value->valuedouble;
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "cron_expr");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->cron_expr, value->valuestring, sizeof(item->cron_expr));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "event_type");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->event_type, value->valuestring, sizeof(item->event_type));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "event_key");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->event_key, value->valuestring, sizeof(item->event_key));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "source_channel");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->source_channel, value->valuestring, sizeof(item->source_channel));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "chat_id");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->chat_id, value->valuestring, sizeof(item->chat_id));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "content_type");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->content_type, value->valuestring, sizeof(item->content_type));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "session_policy");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->session_policy, value->valuestring, sizeof(item->session_policy));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "text");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->text, value->valuestring, sizeof(item->text));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "payload_json");
++    if (cJSON_IsString(value)) {
++        strlcpy(item->payload_json, value->valuestring, sizeof(item->payload_json));
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "catch_up_policy");
++    if (cJSON_IsString(value)) {
++        item->catch_up_policy = cap_scheduler_catch_up_from_string(value->valuestring);
++    }
++    value = cJSON_GetObjectItemCaseSensitive(node, "max_runs");
++    if (cJSON_IsNumber(value)) {
++        item->max_runs = value->valueint;
++    }
++
++    cap_scheduler_apply_defaults(item, default_timezone);
++}
++
++esp_err_t cap_scheduler_entry_to_json(const cap_scheduler_entry_t *entry,
++                                      bool include_item,
++                                      cJSON **out_json)
++{
++    cJSON *root = NULL;
++
++    if (!entry || !out_json) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    root = cJSON_CreateObject();
++    if (!root) {
++        return ESP_ERR_NO_MEM;
++    }
++
++    cJSON_AddStringToObject(root, "id", entry->item.id);
++    cJSON_AddStringToObject(root, "status", cap_scheduler_status_to_string(entry->status));
++    cJSON_AddNumberToObject(root, "next_fire_ms", (double)entry->next_fire_ms);
++    cJSON_AddNumberToObject(root, "last_fire_ms", (double)entry->last_fire_ms);
++    cJSON_AddNumberToObject(root, "last_success_ms", (double)entry->last_success_ms);
++    cJSON_AddNumberToObject(root, "run_count", entry->run_count);
++    cJSON_AddNumberToObject(root, "missed_count", entry->missed_count);
++    cJSON_AddNumberToObject(root, "last_error_code", entry->last_error_code);
++
++    if (include_item) {
++        cJSON_AddBoolToObject(root, "enabled", entry->item.enabled);
++        cJSON_AddStringToObject(root, "kind", cap_scheduler_kind_to_string(entry->item.kind));
++        cJSON_AddStringToObject(root, "timezone", entry->item.timezone);
++        cJSON_AddNumberToObject(root, "start_at_ms", (double)entry->item.start_at_ms);
++        cJSON_AddNumberToObject(root, "end_at_ms", (double)entry->item.end_at_ms);
++        cJSON_AddNumberToObject(root, "interval_ms", (double)entry->item.interval_ms);
++        cJSON_AddStringToObject(root, "cron_expr", entry->item.cron_expr);
++        cJSON_AddStringToObject(root, "event_type", entry->item.event_type);
++        cJSON_AddStringToObject(root, "event_key", entry->item.event_key);
++        cJSON_AddStringToObject(root, "source_channel", entry->item.source_channel);
++        cJSON_AddStringToObject(root, "chat_id", entry->item.chat_id);
++        cJSON_AddStringToObject(root, "content_type", entry->item.content_type);
++        cJSON_AddStringToObject(root, "session_policy", entry->item.session_policy);
++        cJSON_AddStringToObject(root, "text", entry->item.text);
++        cJSON_AddStringToObject(root, "payload_json", entry->item.payload_json);
++        cJSON_AddStringToObject(root, "catch_up_policy", cap_scheduler_catch_up_to_string(entry->item.catch_up_policy));
++        cJSON_AddNumberToObject(root, "max_runs", entry->item.max_runs);
++    }
++
++    *out_json = root;
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_load_items(const char *path,
++                                   cap_scheduler_item_t *items,
++                                   size_t max_items,
++                                   size_t *out_count,
++                                   const char *default_timezone)
++{
++    char *buf = NULL;
++    cJSON *root = NULL;
++    size_t count = 0;
++    esp_err_t err;
++
++    if (!items || !out_count) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    err = cap_scheduler_read_file(path, &buf);
++    if (err == ESP_ERR_NOT_FOUND) {
++        *out_count = 0;
++        return ESP_OK;
++    }
++    if (err != ESP_OK) {
++        return err;
++    }
++
++    root = cJSON_Parse(buf);
++    free(buf);
++    if (!cJSON_IsArray(root)) {
++        cJSON_Delete(root);
++        return ESP_ERR_INVALID_RESPONSE;
++    }
++
++    cJSON *node = NULL;
++    cJSON_ArrayForEach(node, root) {
++        if (!cJSON_IsObject(node)) {
++            continue;
++        }
++        if (count >= max_items) {
++            cJSON_Delete(root);
++            return ESP_ERR_NO_MEM;
++        }
++        cap_scheduler_parse_item_json(node, &items[count], default_timezone);
++        err = cap_scheduler_validate_item(&items[count]);
++        if (err != ESP_OK) {
++            cJSON_Delete(root);
++            return err;
++        }
++        count++;
++    }
++
++    cJSON_Delete(root);
++    *out_count = count;
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_save_items(const char *path,
++                                   const cap_scheduler_entry_t *entries,
++                                   size_t entry_count)
++{
++    cJSON *root = cJSON_CreateArray();
++    char *rendered = NULL;
++    esp_err_t err = ESP_OK;
++
++    if (!root) {
++        return ESP_ERR_NO_MEM;
++    }
++
++    for (size_t i = 0; i < entry_count; i++) {
++        cJSON *obj = NULL;
++
++        if (!entries[i].occupied) {
++            continue;
++        }
++        err = cap_scheduler_entry_to_json(&entries[i], true, &obj);
++        if (err != ESP_OK) {
++            cJSON_Delete(root);
++            return err;
++        }
++        cJSON_DeleteItemFromObject(obj, "status");
++        cJSON_DeleteItemFromObject(obj, "next_fire_ms");
++        cJSON_DeleteItemFromObject(obj, "last_fire_ms");
++        cJSON_DeleteItemFromObject(obj, "last_success_ms");
++        cJSON_DeleteItemFromObject(obj, "run_count");
++        cJSON_DeleteItemFromObject(obj, "missed_count");
++        cJSON_DeleteItemFromObject(obj, "last_error_code");
++        cJSON_AddItemToArray(root, obj);
++    }
++
++    rendered = cJSON_Print(root);
++    cJSON_Delete(root);
++    if (!rendered) {
++        return ESP_ERR_NO_MEM;
++    }
++    err = cap_scheduler_write_file(path, rendered);
++    free(rendered);
++    return err;
++}
++
++esp_err_t cap_scheduler_load_state(const char *path,
++                                   cap_scheduler_entry_t *entries,
++                                   size_t entry_count)
++{
++    char *buf = NULL;
++    cJSON *root = NULL;
++    esp_err_t err;
++
++    if (!entries) {
++        return ESP_ERR_INVALID_ARG;
++    }
++
++    err = cap_scheduler_read_file(path, &buf);
++    if (err == ESP_ERR_NOT_FOUND) {
++        return ESP_OK;
++    }
++    if (err != ESP_OK) {
++        return err;
++    }
++
++    root = cJSON_Parse(buf);
++    free(buf);
++    if (!cJSON_IsArray(root)) {
++        cJSON_Delete(root);
++        return ESP_ERR_INVALID_RESPONSE;
++    }
++
++    cJSON *node = NULL;
++    cJSON_ArrayForEach(node, root) {
++        const cJSON *id_item = cJSON_GetObjectItemCaseSensitive(node, "id");
++        if (!cJSON_IsString(id_item)) {
++            continue;
++        }
++        for (size_t i = 0; i < entry_count; i++) {
++            const cJSON *value;
++
++            if (!entries[i].occupied || strcmp(entries[i].item.id, id_item->valuestring) != 0) {
++                continue;
++            }
++            value = cJSON_GetObjectItemCaseSensitive(node, "status");
++            if (cJSON_IsString(value)) {
++                cap_scheduler_status_from_string(value->valuestring, &entries[i].status);
++            }
++            value = cJSON_GetObjectItemCaseSensitive(node, "next_fire_ms");
++            if (cJSON_IsNumber(value)) {
++                entries[i].next_fire_ms = (int64_t)value->valuedouble;
++            }
++            value = cJSON_GetObjectItemCaseSensitive(node, "last_fire_ms");
++            if (cJSON_IsNumber(value)) {
++                entries[i].last_fire_ms = (int64_t)value->valuedouble;
++            }
++            value = cJSON_GetObjectItemCaseSensitive(node, "last_success_ms");
++            if (cJSON_IsNumber(value)) {
++                entries[i].last_success_ms = (int64_t)value->valuedouble;
++            }
++            value = cJSON_GetObjectItemCaseSensitive(node, "run_count");
++            if (cJSON_IsNumber(value)) {
++                entries[i].run_count = value->valueint;
++            }
++            value = cJSON_GetObjectItemCaseSensitive(node, "missed_count");
++            if (cJSON_IsNumber(value)) {
++                entries[i].missed_count = value->valueint;
++            }
++            value = cJSON_GetObjectItemCaseSensitive(node, "last_error_code");
++            if (cJSON_IsNumber(value)) {
++                entries[i].last_error_code = value->valueint;
++            }
++            break;
++        }
++    }
++
++    cJSON_Delete(root);
++    return ESP_OK;
++}
++
++esp_err_t cap_scheduler_save_state(const char *path,
++                                   const cap_scheduler_entry_t *entries,
++                                   size_t entry_count)
++{
++    cJSON *root = cJSON_CreateArray();
++    char *rendered = NULL;
++    esp_err_t err = ESP_OK;
++
++    if (!root) {
++        return ESP_ERR_NO_MEM;
++    }
++
++    for (size_t i = 0; i < entry_count; i++) {
++        cJSON *obj = NULL;
++
++        if (!entries[i].occupied) {
++            continue;
++        }
++        err = cap_scheduler_entry_to_json(&entries[i], false, &obj);
++        if (err != ESP_OK) {
++            cJSON_Delete(root);
++            return err;
++        }
++        cJSON_AddItemToArray(root, obj);
++    }
++
++    rendered = cJSON_Print(root);
++    cJSON_Delete(root);
++    if (!rendered) {
++        return ESP_ERR_NO_MEM;
++    }
++    err = cap_scheduler_write_file(path, rendered);
++    free(rendered);
++    return err;
++}
+diff --git a/components/cap_scheduler/src/cmd_cap_scheduler.c b/components/cap_scheduler/src/cmd_cap_scheduler.c
+new file mode 100644
+index 0000000..4286efe
+--- /dev/null
++++ b/components/cap_scheduler/src/cmd_cap_scheduler.c
+@@ -0,0 +1,134 @@
++#include "cmd_cap_scheduler.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++
++#include "argtable3/argtable3.h"
++#include "cap_scheduler.h"
++#include "esp_console.h"
++
++static struct {
++    struct arg_lit *list;
++    struct arg_lit *reload;
++    struct arg_lit *enable;
++    struct arg_lit *disable;
++    struct arg_lit *pause;
++    struct arg_lit *resume;
++    struct arg_lit *trigger;
++    struct arg_str *id;
++    struct arg_end *end;
++} scheduler_args;
++
++static int scheduler_func(int argc, char **argv)
++{
++    char *output = NULL;
++    esp_err_t err;
++    int operation_count;
++    int nerrors = arg_parse(argc, argv, (void **)&scheduler_args);
++
++    if (nerrors != 0) {
++        arg_print_errors(stderr, scheduler_args.end, argv[0]);
++        return 1;
++    }
++
++    operation_count = scheduler_args.list->count + scheduler_args.reload->count +
++                      scheduler_args.enable->count + scheduler_args.disable->count +
++                      scheduler_args.pause->count + scheduler_args.resume->count +
++                      scheduler_args.trigger->count;
++    if (operation_count != 1) {
++        printf("Exactly one operation must be specified\n");
++        return 1;
++    }
++
++    if (scheduler_args.reload->count) {
++        err = cap_scheduler_reload();
++        if (err != ESP_OK) {
++            printf("scheduler reload failed: %s\n", esp_err_to_name(err));
++            return 1;
++        }
++        printf("scheduler definitions reloaded\n");
++        return 0;
++    }
++
++    if (scheduler_args.list->count) {
++        output = calloc(1, 8192);
++        if (!output) {
++            printf("Out of memory\n");
++            return 1;
++        }
++        err = cap_scheduler_list_json(output, 8192);
++        if (err != ESP_OK) {
++            printf("scheduler list failed: %s\n", esp_err_to_name(err));
++            free(output);
++            return 1;
++        }
++        printf("%s\n", output);
++        free(output);
++        return 0;
++    }
++
++    if (!scheduler_args.id->count) {
++        printf("'--id' is required for this operation\n");
++        return 1;
++    }
++
++    if (scheduler_args.enable->count) {
++        err = cap_scheduler_enable(scheduler_args.id->sval[0], true);
++    } else if (scheduler_args.disable->count) {
++        err = cap_scheduler_enable(scheduler_args.id->sval[0], false);
++    } else if (scheduler_args.pause->count) {
++        err = cap_scheduler_pause(scheduler_args.id->sval[0]);
++    } else if (scheduler_args.resume->count) {
++        err = cap_scheduler_resume(scheduler_args.id->sval[0]);
++    } else {
++        err = cap_scheduler_trigger_now(scheduler_args.id->sval[0]);
++    }
++
++    if (err != ESP_OK) {
++        printf("scheduler operation failed: %s\n", esp_err_to_name(err));
++        return 1;
++    }
++
++    output = calloc(1, 2048);
++    if (!output) {
++        printf("Out of memory\n");
++        return 1;
++    }
++    err = cap_scheduler_get_state_json(scheduler_args.id->sval[0], output, 2048);
++    if (err != ESP_OK) {
++        printf("scheduler show failed: %s\n", esp_err_to_name(err));
++        free(output);
++        return 1;
++    }
++    printf("%s\n", output);
++    free(output);
++    return 0;
++}
++
++void register_cap_scheduler(void)
++{
++    scheduler_args.list = arg_lit0("l", "list", "List scheduler entries");
++    scheduler_args.reload = arg_lit0(NULL, "reload", "Reload scheduler definitions from disk");
++    scheduler_args.enable = arg_lit0(NULL, "enable", "Enable one scheduler entry");
++    scheduler_args.disable = arg_lit0(NULL, "disable", "Disable one scheduler entry");
++    scheduler_args.pause = arg_lit0(NULL, "pause", "Pause one scheduler entry");
++    scheduler_args.resume = arg_lit0(NULL, "resume", "Resume one scheduler entry");
++    scheduler_args.trigger = arg_lit0(NULL, "trigger", "Trigger one scheduler entry now");
++    scheduler_args.id = arg_str0("i", "id", "<id>", "Scheduler id");
++    scheduler_args.end = arg_end(10);
++
++    const esp_console_cmd_t scheduler_cmd = {
++        .command = "scheduler",
++        .help = "Scheduler operations.\n"
++                "Examples:\n"
++                " scheduler --list\n"
++                " scheduler --reload\n"
++                " scheduler --enable --id hourly_ping\n"
++                " scheduler --pause --id hourly_ping\n"
++                " scheduler --trigger --id hourly_ping\n",
++        .func = scheduler_func,
++        .argtable = &scheduler_args,
++    };
++
++    ESP_ERROR_CHECK(esp_console_cmd_register(&scheduler_cmd));
++}

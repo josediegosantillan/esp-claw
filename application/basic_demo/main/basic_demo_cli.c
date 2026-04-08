@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "cap_im_qq.h"
+#include "cmd_cap_scheduler.h"
 #include "cmd_cap_im_feishu.h"
 #include "cmd_cap_llm_inspect.h"
 #include "cmd_cap_mcp_client.h"
@@ -695,6 +696,7 @@ esp_err_t basic_demo_cli_start(void)
     register_cap_llm_inspect();
     register_cap_mcp_client();
     register_cap_mcp_server();
+    register_cap_scheduler();
     register_cap_skill();
     register_cap_time();
     register_cap_web_search();

@@ -20,6 +20,7 @@
 #include "cap_lua.h"
 #include "cap_mcp_client.h"
 #include "cap_mcp_server.h"
+#include "cap_scheduler.h"
 #include "cap_skill.h"
 #include "cap_time.h"
 #include "cap_web_search.h"
@@ -44,6 +45,8 @@ static const char *const BASIC_DEMO_LLM_VISIBLE_GROUPS[] = {
 #define BASIC_DEMO_LUA_ROOT_DIR       "/fatfs/data/lua"
 #define BASIC_DEMO_FATFS_BASE_PATH       "/fatfs/data"
 #define BASIC_DEMO_AUTOMATION_RULES_PATH "/fatfs/data/automation/automations.json"
+#define BASIC_DEMO_SCHEDULER_RULES_PATH  "/fatfs/data/scheduler/schedules.json"
+#define BASIC_DEMO_SCHEDULER_STATE_PATH  "/fatfs/data/scheduler/scheduler_state.json"
 #define BASIC_DEMO_IM_ATTACHMENT_ROOT    "/fatfs/data/inbox"
 #define BASIC_DEMO_IM_ATTACHMENT_MAX_BYTES (2 * 1024 * 1024)
 
@@ -104,7 +107,7 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
 {
     claw_cap_config_t cap_config = {
         .max_capabilities = 48,
-        .max_groups = 16,
+        .max_groups = 20,
     };
 
     ESP_RETURN_ON_ERROR(claw_cap_init(&cap_config), TAG, "Failed to init claw_cap");
@@ -185,6 +188,13 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
     }),
     TAG,
     "Failed to whitelist event_router");
+    ESP_RETURN_ON_ERROR(cap_cli_register_command(&(cap_cli_command_t) {
+        .command_name = "scheduler",
+        .description = "Manage and inspect scheduler operations",
+        .usage_hint = "scheduler --list",
+    }),
+    TAG,
+    "Failed to whitelist scheduler");
     ESP_RETURN_ON_ERROR(cap_time_set_timezone(settings->time_timezone),
                         TAG,
                         "Failed to set time cap timezone");
@@ -292,6 +302,9 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
     ESP_RETURN_ON_ERROR(cap_mcp_server_register_group(),
                         TAG,
                         "Failed to register MCP server cap");
+    ESP_RETURN_ON_ERROR(cap_scheduler_register_group(),
+                        TAG,
+                        "Failed to register scheduler cap");
     ESP_RETURN_ON_ERROR(cap_cli_register_group(), TAG, "Failed to register CLI cap");
     ESP_RETURN_ON_ERROR(cap_skill_register_group(),
                         TAG,
@@ -367,6 +380,20 @@ esp_err_t app_clawgent_start(const basic_demo_settings_t *settings)
     ESP_RETURN_ON_ERROR(claw_event_router_init(&router_config),
                         TAG,
                         "Failed to init event router");
+    ESP_RETURN_ON_ERROR(cap_scheduler_init(&(cap_scheduler_config_t) {
+                            .schedules_path = BASIC_DEMO_SCHEDULER_RULES_PATH,
+                            .state_path = BASIC_DEMO_SCHEDULER_STATE_PATH,
+                            .default_timezone = settings->time_timezone,
+                            .tick_ms = 1000,
+                            .max_items = 32,
+                            .task_stack_size = 6144,
+                            .task_priority = 5,
+                            .task_core = tskNO_AFFINITY,
+                            .publish_event = claw_event_router_publish,
+                            .persist_after_fire = true,
+                        }),
+                        TAG,
+                        "Failed to init scheduler");
     ESP_RETURN_ON_ERROR(init_memory(), TAG, "Failed to init memory");
     ESP_RETURN_ON_ERROR(init_skills(), TAG, "Failed to init skills");
     ESP_RETURN_ON_ERROR(init_capabilities(settings), TAG, "Failed to init capabilities");
@@ -435,6 +462,7 @@ esp_err_t app_clawgent_start(const basic_demo_settings_t *settings)
     }
 
     ESP_RETURN_ON_ERROR(claw_event_router_start(), TAG, "Failed to start event router");
+    ESP_RETURN_ON_ERROR(cap_scheduler_start(), TAG, "Failed to start scheduler");
     ESP_RETURN_ON_ERROR(basic_demo_cli_start(), TAG, "Failed to start CLI");
 
     return ESP_OK;
