@@ -19,7 +19,7 @@ typedef struct {
     uint32_t height;
     uint32_t pixel_format;
     char pixel_format_str[5];
-} claw_camera_stream_info_t;
+} camera_stream_info_t;
 
 typedef struct {
     uint32_t width;
@@ -28,14 +28,17 @@ typedef struct {
     char pixel_format_str[5];
     size_t frame_bytes;
     int64_t timestamp_us;
-} claw_camera_frame_info_t;
+} camera_frame_info_t;
 
-esp_err_t claw_camera_open(const char *dev_path);
-esp_err_t claw_camera_get_stream_info(claw_camera_stream_info_t *out_info);
-esp_err_t claw_camera_capture_jpeg(int timeout_ms, uint8_t **jpeg_data, size_t *jpeg_bytes,
-                                   claw_camera_frame_info_t *out_info);
-esp_err_t claw_camera_close(void);
-void claw_camera_free_buffer(void *buffer);
+esp_err_t camera_open(const char *dev_path);
+esp_err_t camera_get_stream_info(camera_stream_info_t *out_info);
+esp_err_t camera_capture_frame(int timeout_ms, uint8_t **frame_data, size_t *frame_bytes,
+                               camera_frame_info_t *out_info);
+esp_err_t camera_release_frame(void *frame_data);
+esp_err_t camera_capture_jpeg(int timeout_ms, uint8_t **jpeg_data, size_t *jpeg_bytes,
+                              camera_frame_info_t *out_info);
+esp_err_t camera_close(void);
+void camera_free_buffer(void *buffer);
 
 #ifdef __cplusplus
 }

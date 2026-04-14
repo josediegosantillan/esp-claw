@@ -70,10 +70,10 @@ static esp_err_t init_fatfs(void)
 
 #if BASIC_DEMO_ENABLE_MEM_LOG
 
-static TaskStatus_t s_task_status_snapshot[24];
-
 static void print_task_stack_info(void)
 {
+#ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    static TaskStatus_t s_task_status_snapshot[24];
     UBaseType_t count = uxTaskGetSystemState(s_task_status_snapshot,
                                              sizeof(s_task_status_snapshot) / sizeof(s_task_status_snapshot[0]),
                                              NULL);
@@ -84,6 +84,7 @@ static void print_task_stack_info(void)
                  s_task_status_snapshot[i].pcTaskName,
                  s_task_status_snapshot[i].usStackHighWaterMark);
     }
+#endif
 }
 
 /* Periodic task: print internal free, minimum free, and PSRAM free every 20s */
@@ -91,7 +92,7 @@ static void memory_monitor_task(void *arg)
 {
     (void)arg;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(20000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
         size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         size_t internal_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
         size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);

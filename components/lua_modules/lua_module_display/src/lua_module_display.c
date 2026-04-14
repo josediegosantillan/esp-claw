@@ -80,6 +80,57 @@ static void *lua_display_check_lightuserdata_arg(lua_State *L, int index, const 
     return ptr;
 }
 
+static const uint8_t *lua_display_check_buffer_arg(lua_State *L, int index, size_t expected,
+                                                   size_t *out_len)
+{
+    if (lua_islightuserdata(L, index)) {
+        const void *ptr = lua_touserdata(L, index);
+        luaL_argcheck(L, ptr != NULL, index, "display buffer lightuserdata expected");
+        if (out_len != NULL) {
+            *out_len = expected;
+        }
+        return (const uint8_t *)ptr;
+    }
+
+    size_t data_len = 0;
+    const uint8_t *data = (const uint8_t *)luaL_checklstring(L, index, &data_len);
+    if (out_len != NULL) {
+        *out_len = data_len;
+    }
+    return data;
+}
+
+static void *lua_display_opt_lightuserdata_arg(lua_State *L, int index)
+{
+    if (lua_isnoneornil(L, index)) {
+        return NULL;
+    }
+
+    return lua_display_check_lightuserdata_arg(L, index,
+                                               "display io_handle lightuserdata expected");
+}
+
+static display_hal_panel_if_t lua_display_parse_panel_if(lua_State *L, int index)
+{
+    if (lua_isnoneornil(L, index)) {
+        return DISPLAY_HAL_PANEL_IF_IO;
+    }
+
+    if (!lua_isinteger(L, index)) {
+        luaL_error(L, "display panel_if must be an interface constant");
+        return DISPLAY_HAL_PANEL_IF_IO;
+    }
+
+    lua_Integer value = lua_tointeger(L, index);
+
+    if (value >= DISPLAY_HAL_PANEL_IF_IO && value <= DISPLAY_HAL_PANEL_IF_MIPI_DSI) {
+        return (display_hal_panel_if_t)value;
+    }
+
+    luaL_error(L, "display panel_if integer is out of range");
+    return DISPLAY_HAL_PANEL_IF_IO;
+}
+
 /* -------------------------------------------------------------------------
  * Screen lifecycle
  * ---------------------------------------------------------------------- */
@@ -90,12 +141,12 @@ static int lua_display_init(lua_State *L)
         (esp_lcd_panel_handle_t)lua_display_check_lightuserdata_arg(
             L, 1, "display panel_handle lightuserdata expected");
     esp_lcd_panel_io_handle_t io_handle =
-        (esp_lcd_panel_io_handle_t)lua_display_check_lightuserdata_arg(
-            L, 2, "display io_handle lightuserdata expected");
+        (esp_lcd_panel_io_handle_t)lua_display_opt_lightuserdata_arg(L, 2);
     int lcd_width = lua_display_check_integer_arg(L, 3, "lcd_width");
     int lcd_height = lua_display_check_integer_arg(L, 4, "lcd_height");
+    display_hal_panel_if_t panel_if = lua_display_parse_panel_if(L, 5);
 
-    esp_err_t err = display_hal_create(panel_handle, io_handle, lcd_width, lcd_height);
+    esp_err_t err = display_hal_create(panel_handle, io_handle, panel_if, lcd_width, lcd_height);
     if (err != ESP_OK) {
         return luaL_error(L, "display init failed: %s", esp_err_to_name(err));
     }
@@ -547,66 +598,29 @@ static int lua_display_height(lua_State *L)
  * Bitmap
  * ---------------------------------------------------------------------- */
 
-static int lua_display_draw_bitmap_impl(lua_State *L, bool input_is_little_endian)
+static int lua_display_draw_bitmap(lua_State *L)
 {
     int x = (int)luaL_checkinteger(L, 1);
     int y = (int)luaL_checkinteger(L, 2);
     int w = (int)luaL_checkinteger(L, 3);
     int h = (int)luaL_checkinteger(L, 4);
-    size_t data_len = 0;
-    const uint8_t *data = (const uint8_t *)luaL_checklstring(L, 5, &data_len);
-    uint8_t *swapped = NULL;
-    const uint16_t *pixels = NULL;
-
     if (w <= 0 || h <= 0) {
         return luaL_error(L, "draw_bitmap: invalid size (%d x %d)", w, h);
     }
 
     size_t expected = (size_t)w * (size_t)h * 2;
+    size_t data_len = 0;
+    const uint8_t *data = lua_display_check_buffer_arg(L, 5, expected, &data_len);
     if (data_len < expected) {
         return luaL_error(L, "draw_bitmap: data too short (%d bytes, need %d)",
                           (int)data_len, (int)expected);
     }
 
-    if (input_is_little_endian) {
-        swapped = malloc(expected);
-        if (!swapped) {
-            return luaL_error(L, "draw_bitmap: out of memory (%d bytes)", (int)expected);
-        }
-        /* Swap each pixel from little-endian to MSB-first order */
-        for (size_t i = 0; i < expected; i += 2) {
-            swapped[i]     = data[i + 1];
-            swapped[i + 1] = data[i];
-        }
-        pixels = (const uint16_t *)swapped;
-    } else {
-        pixels = (const uint16_t *)data;
-    }
-
-    esp_err_t err = display_hal_draw_bitmap(x, y, w, h, pixels);
-    free(swapped);
+    esp_err_t err = display_hal_draw_bitmap(x, y, w, h, (const uint16_t *)data);
     if (err != ESP_OK) {
         return luaL_error(L, "display draw_bitmap failed: %s", esp_err_to_name(err));
     }
     return 0;
-}
-
-/*
- * draw_bitmap(x, y, w, h, data)
- *   data: raw RGB565 bytes, MSB-first (red = 0xF8 0x00).
- */
-static int lua_display_draw_bitmap(lua_State *L)
-{
-    return lua_display_draw_bitmap_impl(L, false);
-}
-
-/*
- * draw_bitmap_le(x, y, w, h, data)
- *   data: RGB565 little-endian; bytes are swapped to MSB-first before sending.
- */
-static int lua_display_draw_bitmap_le(lua_State *L)
-{
-    return lua_display_draw_bitmap_impl(L, true);
 }
 
 static int lua_display_draw_bitmap_crop(lua_State *L)
@@ -619,8 +633,6 @@ static int lua_display_draw_bitmap_crop(lua_State *L)
     int h          = lua_display_check_integer_arg(L, 6, "height");
     int src_width  = lua_display_check_integer_arg(L, 7, "src_width");
     int src_height = lua_display_check_integer_arg(L, 8, "src_height");
-    size_t data_len = 0;
-    const uint8_t *data = (const uint8_t *)luaL_checklstring(L, 9, &data_len);
 
     if (src_width <= 0 || src_height <= 0) {
         return luaL_error(L, "draw_bitmap_crop: invalid source size (%d x %d)",
@@ -628,6 +640,8 @@ static int lua_display_draw_bitmap_crop(lua_State *L)
     }
 
     size_t expected = (size_t)src_width * (size_t)src_height * 2;
+    size_t data_len = 0;
+    const uint8_t *data = lua_display_check_buffer_arg(L, 9, expected, &data_len);
     if (data_len < expected) {
         return luaL_error(L, "draw_bitmap_crop: data too short (%d bytes, need %d)",
                           (int)data_len, (int)expected);
@@ -769,8 +783,8 @@ static esp_err_t lua_display_decode_png(const uint8_t *png_data, size_t png_len,
             uint8_t g = (uint8_t)((src[1] * alpha + 127) / 255);
             uint8_t b = (uint8_t)((src[2] * alpha + 127) / 255);
             uint16_t c = lua_display_rgb888_to_rgb565(r, g, b);
-            dst_row[col * 2]     = (uint8_t)(c >> 8);
-            dst_row[col * 2 + 1] = (uint8_t)(c & 0xFF);
+            dst_row[col * 2]     = (uint8_t)(c & 0xFF);
+            dst_row[col * 2 + 1] = (uint8_t)(c >> 8);
         }
     }
 
@@ -920,6 +934,157 @@ static int lua_display_draw_jpeg_file_crop(lua_State *L)
 }
 
 static int lua_align_down_8(int v) { return v & ~7; }
+
+static int lua_display_align_down(int value, int align)
+{
+    return value - (value % align);
+}
+
+static int lua_display_draw_rgb565_crop(lua_State *L)
+{
+    int x = lua_display_check_integer_arg(L, 1, "x");
+    int y = lua_display_check_integer_arg(L, 2, "y");
+    int src_x = lua_display_check_integer_arg(L, 3, "src_x");
+    int src_y = lua_display_check_integer_arg(L, 4, "src_y");
+    int w = lua_display_check_integer_arg(L, 5, "width");
+    int h = lua_display_check_integer_arg(L, 6, "height");
+    int src_width = lua_display_check_integer_arg(L, 7, "src_width");
+    int src_height = lua_display_check_integer_arg(L, 8, "src_height");
+    size_t expected = 0;
+    if (src_width <= 0 || src_height <= 0) {
+        return luaL_error(L, "draw_rgb565_crop: invalid source size (%d x %d)", src_width, src_height);
+    }
+    expected = (size_t)src_width * (size_t)src_height * 2;
+    size_t data_len = 0;
+    const uint8_t *data = lua_display_check_buffer_arg(L, 9, expected, &data_len);
+    if (data_len < expected) {
+        return luaL_error(L, "draw_rgb565_crop: data too short (%d bytes, need %d)",
+                          (int)data_len, (int)expected);
+    }
+
+    esp_err_t err = display_hal_draw_bitmap_crop(x, y, src_x, src_y, w, h,
+                                                 src_width, src_height,
+                                                 (const uint16_t *)data);
+    if (err != ESP_OK) {
+        return luaL_error(L, "display draw_rgb565_crop failed: %s", esp_err_to_name(err));
+    }
+    lua_pushinteger(L, w);
+    lua_pushinteger(L, h);
+    return 2;
+}
+
+static int lua_display_draw_rgb565_scaled(lua_State *L)
+{
+    int x = lua_display_check_integer_arg(L, 1, "x");
+    int y = lua_display_check_integer_arg(L, 2, "y");
+    int src_width = lua_display_check_integer_arg(L, 3, "src_width");
+    int src_height = lua_display_check_integer_arg(L, 4, "src_height");
+    int scale_w = lua_display_check_integer_arg(L, 5, "scale_w");
+    int scale_h = lua_display_check_integer_arg(L, 6, "scale_h");
+    size_t expected = 0;
+    int out_w = 0;
+    int out_h = 0;
+
+    if (src_width <= 0 || src_height <= 0) {
+        return luaL_error(L, "draw_rgb565_scaled: invalid source size (%d x %d)", src_width, src_height);
+    }
+    if (scale_w <= 0 || scale_h <= 0) {
+        return luaL_error(L, "draw_rgb565_scaled: invalid scale size (%d x %d)", scale_w, scale_h);
+    }
+    expected = (size_t)src_width * (size_t)src_height * 2;
+    size_t data_len = 0;
+    const uint8_t *data = lua_display_check_buffer_arg(L, 7, expected, &data_len);
+    if (data_len < expected) {
+        return luaL_error(L, "draw_rgb565_scaled: data too short (%d bytes, need %d)",
+                          (int)data_len, (int)expected);
+    }
+
+    esp_err_t err = display_hal_draw_bitmap_scaled(x, y,
+                                                   (const uint16_t *)data,
+                                                   src_width, src_height,
+                                                   scale_w, scale_h,
+                                                   &out_w, &out_h);
+    if (err != ESP_OK) {
+        return luaL_error(L, "display draw_rgb565_scaled failed: %s", esp_err_to_name(err));
+    }
+    lua_pushinteger(L, out_w);
+    lua_pushinteger(L, out_h);
+    return 2;
+}
+
+static int lua_display_draw_rgb565_fit(lua_State *L)
+{
+    int x = lua_display_check_integer_arg(L, 1, "x");
+    int y = lua_display_check_integer_arg(L, 2, "y");
+    int src_width = lua_display_check_integer_arg(L, 3, "src_width");
+    int src_height = lua_display_check_integer_arg(L, 4, "src_height");
+    int max_w = lua_display_check_integer_arg(L, 5, "max_w");
+    int max_h = lua_display_check_integer_arg(L, 6, "max_h");
+    size_t expected = 0;
+    int out_w = 0;
+    int out_h = 0;
+
+    if (src_width <= 0 || src_height <= 0) {
+        return luaL_error(L, "draw_rgb565_fit: invalid source size (%d x %d)", src_width, src_height);
+    }
+    if (max_w <= 0 || max_h <= 0) {
+        return luaL_error(L, "draw_rgb565_fit: max_w and max_h must be positive");
+    }
+    expected = (size_t)src_width * (size_t)src_height * 2;
+    size_t data_len = 0;
+    const uint8_t *data = lua_display_check_buffer_arg(L, 7, expected, &data_len);
+    if (data_len < expected) {
+        return luaL_error(L, "draw_rgb565_fit: data too short (%d bytes, need %d)",
+                          (int)data_len, (int)expected);
+    }
+
+    if (src_width <= max_w && src_height <= max_h) {
+        esp_err_t err = display_hal_draw_bitmap(x, y, src_width, src_height, (const uint16_t *)data);
+        if (err != ESP_OK) {
+            return luaL_error(L, "display draw_rgb565_fit failed: %s", esp_err_to_name(err));
+        }
+        lua_pushinteger(L, src_width);
+        lua_pushinteger(L, src_height);
+        return 2;
+    }
+
+    double ratio_w = (double)max_w / src_width;
+    double ratio_h = (double)max_h / src_height;
+    double ratio = (ratio_w < ratio_h) ? ratio_w : ratio_h;
+    int scale_w = (int)(src_width * ratio);
+    int scale_h = (int)(src_height * ratio);
+
+    if (scale_w <= 0) {
+        scale_w = 1;
+    }
+    if (scale_h <= 0) {
+        scale_h = 1;
+    }
+    if (scale_w >= 8) {
+        scale_w = lua_display_align_down(scale_w, 8);
+        if (scale_w == 0) {
+            scale_w = 8;
+        }
+    }
+    if (scale_h >= 8) {
+        scale_h = lua_display_align_down(scale_h, 8);
+        if (scale_h == 0) {
+            scale_h = 8;
+        }
+    }
+
+    esp_err_t err = display_hal_draw_bitmap_scaled(x, y,
+                                                   (const uint16_t *)data,
+                                                   src_width, src_height,
+                                                   scale_w, scale_h,
+                                                   &out_w, &out_h);
+    if (err != ESP_OK) {
+        return luaL_error(L, "display draw_rgb565_fit failed: %s", esp_err_to_name(err));
+    }
+    lua_pushinteger(L, out_w);
+    lua_pushinteger(L, out_h);
+    return 2;
+}
 
 /*
  * draw_jpeg_file_scaled(x, y, scale_w, scale_h, path)
@@ -1235,10 +1400,14 @@ int luaopen_display(lua_State *L)
 
     lua_pushcfunction(L, lua_display_draw_bitmap);
     lua_setfield(L, -2, "draw_bitmap");
-    lua_pushcfunction(L, lua_display_draw_bitmap_le);
-    lua_setfield(L, -2, "draw_bitmap_le");
     lua_pushcfunction(L, lua_display_draw_bitmap_crop);
     lua_setfield(L, -2, "draw_bitmap_crop");
+    lua_pushcfunction(L, lua_display_draw_rgb565_crop);
+    lua_setfield(L, -2, "draw_rgb565_crop");
+    lua_pushcfunction(L, lua_display_draw_rgb565_scaled);
+    lua_setfield(L, -2, "draw_rgb565_scaled");
+    lua_pushcfunction(L, lua_display_draw_rgb565_fit);
+    lua_setfield(L, -2, "draw_rgb565_fit");
 
     lua_pushcfunction(L, lua_display_draw_jpeg);
     lua_setfield(L, -2, "draw_jpeg");

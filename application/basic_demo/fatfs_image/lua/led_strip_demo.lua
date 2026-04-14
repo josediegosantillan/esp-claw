@@ -18,23 +18,39 @@ print("[led] led strip created")
 strip:clear()
 print("[led] strip cleared")
 
-local function fill_all(r, g, b)
+local function fill_all_rgb(r, g, b)
     for index = 0, LED_COUNT - 1 do
         strip:set_pixel(index, r, g, b)
     end
 end
 
--- Flash solid red twice.
-for i = 1, 2 do
-    print("[led] flash " .. i .. ": on")
-    fill_all(255, 0, 0)
-    strip:refresh()
-    delay.delay_ms(300)
-
-    print("[led] flash " .. i .. ": off")
-    strip:clear()
-    strip:refresh()
-    delay.delay_ms(300)
+local function draw_rainbow(offset)
+    for index = 0, LED_COUNT - 1 do
+        local hue = ((index * 360) // LED_COUNT + offset) % 360
+        strip:set_pixel_hsv(index, hue, 255, 64)
+    end
 end
 
+print("[led] flash start")
+for i = 1, 3 do
+    fill_all_rgb(255, 255, 255)
+    strip:refresh()
+    delay.delay_ms(150)
+
+    strip:clear()
+    strip:refresh()
+    delay.delay_ms(150)
+end
+print("[led] flash end")
+
+print("[led] rainbow animation start")
+for offset = 0, 720, 8 do
+    draw_rainbow(offset)
+    strip:refresh()
+    delay.delay_ms(40)
+end
+
+print("[led] rainbow animation end")
+strip:clear()
+strip:refresh()
 print("[led] done")

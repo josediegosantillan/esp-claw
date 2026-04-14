@@ -11,6 +11,7 @@
 #include "esp_painter.h"
 #include "esp_cache.h"
 #include "esp_heap_caps.h"
+#define CONFIG_SOC_PPA_SUPPORTED 0
 #if CONFIG_SOC_PPA_SUPPORTED
 #include "esp_private/esp_cache_private.h"
 #include "driver/ppa.h"
@@ -485,11 +486,6 @@ cleanup:
     }
 #endif
 
-    ret = esp_cache_msync(buffer, buffer_size, ESP_CACHE_MSYNC_FLAG_INVALIDATE);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Cache sync failed");
-    }
-
     return ret;
 }
 
@@ -539,11 +535,6 @@ esp_err_t esp_painter_draw_string_rgb565(esp_painter_handle_t handle, uint8_t *b
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to draw RGB565 text");
         return ret;
-    }
-
-    ret = esp_cache_msync(buffer, buffer_size, ESP_CACHE_MSYNC_FLAG_INVALIDATE);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Cache sync failed");
     }
 
     return ret;

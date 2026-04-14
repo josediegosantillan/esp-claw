@@ -17,6 +17,12 @@
 #include "esp_painter.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#if CONFIG_SOC_LCD_RGB_SUPPORTED
+#include "esp_lcd_panel_rgb.h"
+#endif
+#if CONFIG_SOC_MIPI_DSI_SUPPORTED
+#include "esp_lcd_mipi_dsi.h"
+#endif
 #if CONFIG_ESP_ROM_HAS_JPEG_DECODE
 #include "rom/tjpgd.h"
 #endif
@@ -33,6 +39,7 @@ typedef struct {
     SemaphoreHandle_t lock;
     esp_lcd_panel_handle_t panel;
     esp_lcd_panel_io_handle_t io;
+    display_hal_panel_if_t panel_if;
     esp_painter_handle_t painter;
     bool display_callbacks_registered;
     bool clip_enabled;
@@ -52,21 +59,41 @@ typedef struct {
     bool flush_in_flight;
     bool framebuffer_initialized;
     SemaphoreHandle_t display_flush_done;
+    uint16_t *submit_swap_buffer;
+    size_t submit_swap_buffer_pixels;
 } display_hal_state_t;
 
 static display_hal_state_t s_state;
 
 static void display_hal_clear_clip_locked(void);
-static esp_err_t display_hal_clear_io_callbacks_locked(void);
+static esp_err_t display_hal_clear_display_callbacks_locked(void);
 static bool display_hal_flush_done_isr(esp_lcd_panel_io_handle_t panel_io,
                                        esp_lcd_panel_io_event_data_t *edata,
                                        void *user_ctx);
+#if CONFIG_SOC_LCD_RGB_SUPPORTED
+static bool display_hal_flush_done_rgb_isr(esp_lcd_panel_handle_t panel,
+                                           const esp_lcd_rgb_panel_event_data_t *edata,
+                                           void *user_ctx);
+#endif
+#if CONFIG_SOC_MIPI_DSI_SUPPORTED
+static bool display_hal_flush_done_dpi_isr(esp_lcd_panel_handle_t panel,
+                                           esp_lcd_dpi_panel_event_data_t *edata,
+                                           void *user_ctx);
+#endif
+static esp_err_t display_hal_register_display_callbacks_locked(void);
 static esp_err_t display_hal_wait_flush_done_locked(TickType_t timeout_ticks);
 static bool display_hal_clip_rect_to_screen_locked(int *x, int *y, int *width, int *height);
 
-static inline uint16_t display_hal_rgb565_to_panel(uint16_t color565)
+static bool display_hal_panel_requires_swap(void)
 {
-    return __builtin_bswap16(color565);
+    return s_state.panel_if == DISPLAY_HAL_PANEL_IF_IO;
+}
+
+static void display_hal_bswap16_into(uint16_t *dst, const uint16_t *src, size_t pixel_count)
+{
+    for (size_t i = 0; i < pixel_count; ++i) {
+        dst[i] = __builtin_bswap16(src[i]);
+    }
 }
 
 static esp_err_t display_hal_lock(void)
@@ -89,8 +116,14 @@ static void display_hal_unlock(void)
 
 static esp_err_t display_hal_require_created_locked(void)
 {
-    ESP_RETURN_ON_FALSE(s_state.panel != NULL && s_state.io != NULL &&
-                        s_state.width > 0 && s_state.height > 0,
+    bool handles_ready = s_state.panel != NULL &&
+                         s_state.width > 0 && s_state.height > 0;
+
+    if (s_state.panel_if == DISPLAY_HAL_PANEL_IF_IO) {
+        handles_ready = handles_ready && (s_state.io != NULL);
+    }
+
+    ESP_RETURN_ON_FALSE(handles_ready,
                         ESP_ERR_INVALID_STATE, TAG, "display not created");
     return ESP_OK;
 }
@@ -102,6 +135,7 @@ static esp_err_t display_hal_ensure_display_locked(void)
 
 esp_err_t display_hal_create(esp_lcd_panel_handle_t panel_handle,
                              esp_lcd_panel_io_handle_t io_handle,
+                             display_hal_panel_if_t panel_if,
                              int lcd_width,
                              int lcd_height)
 {
@@ -111,13 +145,19 @@ esp_err_t display_hal_create(esp_lcd_panel_handle_t panel_handle,
         return ret;
     }
 
-    ESP_GOTO_ON_FALSE(panel_handle != NULL && io_handle != NULL, ESP_ERR_INVALID_ARG,
-                      fail, TAG, "panel/io handle missing");
+    ESP_GOTO_ON_FALSE(panel_handle != NULL, ESP_ERR_INVALID_ARG, fail, TAG, "panel handle missing");
+    ESP_GOTO_ON_FALSE(panel_if >= DISPLAY_HAL_PANEL_IF_IO &&
+                      panel_if <= DISPLAY_HAL_PANEL_IF_MIPI_DSI,
+                      ESP_ERR_INVALID_ARG, fail, TAG, "invalid panel interface");
+    if (panel_if == DISPLAY_HAL_PANEL_IF_IO) {
+        ESP_GOTO_ON_FALSE(io_handle != NULL, ESP_ERR_INVALID_ARG, fail, TAG, "io handle missing");
+    }
     ESP_GOTO_ON_FALSE(lcd_width > 0 && lcd_height > 0, ESP_ERR_INVALID_ARG,
                       fail, TAG, "invalid lcd size");
 
     s_state.panel = panel_handle;
     s_state.io = io_handle;
+    s_state.panel_if = panel_if;
     s_state.width = lcd_width;
     s_state.height = lcd_height;
     s_state.framebuffer_bytes = (size_t)s_state.width * (size_t)s_state.height * sizeof(uint16_t);
@@ -128,6 +168,13 @@ esp_err_t display_hal_create(esp_lcd_panel_handle_t panel_handle,
     s_state.frame_active = false;
     s_state.flush_in_flight = false;
     s_state.framebuffer_initialized = false;
+    s_state.submit_swap_buffer = NULL;
+    s_state.submit_swap_buffer_pixels = 0;
+    if (display_hal_panel_requires_swap()) {
+        s_state.submit_swap_buffer = heap_caps_aligned_alloc(16, (size_t)lcd_width * (size_t)lcd_height * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        ESP_GOTO_ON_FALSE(s_state.submit_swap_buffer != NULL, ESP_ERR_NO_MEM, fail, TAG, "alloc submit swap buffer failed");
+        s_state.submit_swap_buffer_pixels = (size_t)lcd_width * (size_t)lcd_height;
+    }
     display_hal_clear_clip_locked();
 
     if (!s_state.display_flush_done) {
@@ -136,15 +183,16 @@ esp_err_t display_hal_create(esp_lcd_panel_handle_t panel_handle,
                           "create flush semaphore failed");
     }
     if (!s_state.display_callbacks_registered) {
-        const esp_lcd_panel_io_callbacks_t callbacks = {
-            .on_color_trans_done = display_hal_flush_done_isr,
-        };
-        ESP_GOTO_ON_ERROR(esp_lcd_panel_io_register_event_callbacks(s_state.io, &callbacks, NULL),
+        ESP_GOTO_ON_ERROR(display_hal_register_display_callbacks_locked(),
                           fail, TAG, "register flush callback failed");
-        s_state.display_callbacks_registered = true;
     }
 
 fail:
+    if (ret != ESP_OK) {
+        heap_caps_free(s_state.submit_swap_buffer);
+        s_state.submit_swap_buffer = NULL;
+        s_state.submit_swap_buffer_pixels = 0;
+    }
     display_hal_unlock();
     return ret;
 }
@@ -168,7 +216,7 @@ esp_err_t display_hal_destroy(void)
     }
 
     if (s_state.display_callbacks_registered) {
-        ret = display_hal_clear_io_callbacks_locked();
+        ret = display_hal_clear_display_callbacks_locked();
         if (ret != ESP_OK) {
             display_hal_unlock();
             return ret;
@@ -189,6 +237,7 @@ esp_err_t display_hal_destroy(void)
 
     s_state.panel = NULL;
     s_state.io = NULL;
+    s_state.panel_if = DISPLAY_HAL_PANEL_IF_IO;
     s_state.display_callbacks_registered = false;
     s_state.width = 0;
     s_state.height = 0;
@@ -205,6 +254,9 @@ esp_err_t display_hal_destroy(void)
     s_state.clip_y = 0;
     s_state.clip_width = 0;
     s_state.clip_height = 0;
+    heap_caps_free(s_state.submit_swap_buffer);
+    s_state.submit_swap_buffer = NULL;
+    s_state.submit_swap_buffer_pixels = 0;
     s_state.display_flush_done = NULL;
     s_state.lock = NULL;
 
@@ -229,18 +281,94 @@ static void display_hal_clear_clip_locked(void)
     s_state.clip_height = s_state.height;
 }
 
-static esp_err_t display_hal_clear_io_callbacks_locked(void)
+static esp_err_t display_hal_clear_display_callbacks_locked(void)
 {
-    const esp_lcd_panel_io_callbacks_t callbacks = {0};
+    esp_err_t ret = ESP_OK;
 
-    if (!s_state.io) {
-        s_state.display_callbacks_registered = false;
-        return ESP_OK;
+    switch (s_state.panel_if) {
+    case DISPLAY_HAL_PANEL_IF_MIPI_DSI:
+#if CONFIG_SOC_MIPI_DSI_SUPPORTED
+    {
+        const esp_lcd_dpi_panel_event_callbacks_t callbacks = {0};
+        ret = esp_lcd_dpi_panel_register_event_callbacks(s_state.panel, &callbacks, NULL);
+        break;
+    }
+#else
+        ret = ESP_ERR_NOT_SUPPORTED;
+        break;
+#endif
+    case DISPLAY_HAL_PANEL_IF_RGB:
+#if CONFIG_SOC_LCD_RGB_SUPPORTED
+    {
+        const esp_lcd_rgb_panel_event_callbacks_t callbacks = {0};
+        ret = esp_lcd_rgb_panel_register_event_callbacks(s_state.panel, &callbacks, NULL);
+        break;
+    }
+#else
+        ret = ESP_ERR_NOT_SUPPORTED;
+        break;
+#endif
+    case DISPLAY_HAL_PANEL_IF_IO:
+    default: {
+        const esp_lcd_panel_io_callbacks_t callbacks = {0};
+        if (!s_state.io) {
+            s_state.display_callbacks_registered = false;
+            return ESP_OK;
+        }
+        ret = esp_lcd_panel_io_register_event_callbacks(s_state.io, &callbacks, NULL);
+        break;
+    }
     }
 
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_register_event_callbacks(s_state.io, &callbacks, NULL),
-                        TAG, "clear flush callback failed");
+    ESP_RETURN_ON_ERROR(ret, TAG, "clear flush callback failed");
     s_state.display_callbacks_registered = false;
+    return ESP_OK;
+}
+
+static esp_err_t display_hal_register_display_callbacks_locked(void)
+{
+    esp_err_t ret = ESP_OK;
+
+    switch (s_state.panel_if) {
+    case DISPLAY_HAL_PANEL_IF_MIPI_DSI:
+#if CONFIG_SOC_MIPI_DSI_SUPPORTED
+    {
+        const esp_lcd_dpi_panel_event_callbacks_t callbacks = {
+            .on_color_trans_done = display_hal_flush_done_dpi_isr,
+        };
+        ret = esp_lcd_dpi_panel_register_event_callbacks(s_state.panel, &callbacks, NULL);
+        break;
+    }
+#else
+        ret = ESP_ERR_NOT_SUPPORTED;
+        break;
+#endif
+    case DISPLAY_HAL_PANEL_IF_RGB:
+#if CONFIG_SOC_LCD_RGB_SUPPORTED
+    {
+        const esp_lcd_rgb_panel_event_callbacks_t callbacks = {
+            .on_color_trans_done = display_hal_flush_done_rgb_isr,
+        };
+        ret = esp_lcd_rgb_panel_register_event_callbacks(s_state.panel, &callbacks, NULL);
+        break;
+    }
+#else
+        ret = ESP_ERR_NOT_SUPPORTED;
+        break;
+#endif
+    case DISPLAY_HAL_PANEL_IF_IO:
+    default: {
+        const esp_lcd_panel_io_callbacks_t callbacks = {
+            .on_color_trans_done = display_hal_flush_done_isr,
+        };
+        ESP_RETURN_ON_FALSE(s_state.io != NULL, ESP_ERR_INVALID_STATE, TAG, "io handle missing");
+        ret = esp_lcd_panel_io_register_event_callbacks(s_state.io, &callbacks, NULL);
+        break;
+    }
+    }
+
+    ESP_RETURN_ON_ERROR(ret, TAG, "register flush callback failed");
+    s_state.display_callbacks_registered = true;
     return ESP_OK;
 }
 
@@ -271,10 +399,6 @@ static esp_err_t display_hal_alloc_framebuffer_locked(size_t index)
 
     s_state.framebuffers[index] = heap_caps_aligned_alloc(
         16, s_state.framebuffer_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_state.framebuffers[index]) {
-        s_state.framebuffers[index] = heap_caps_aligned_alloc(
-            16, s_state.framebuffer_bytes, MALLOC_CAP_DEFAULT);
-    }
     ESP_RETURN_ON_FALSE(s_state.framebuffers[index] != NULL, ESP_ERR_NO_MEM, TAG,
                         "framebuffer alloc failed");
     memset(s_state.framebuffers[index], 0, s_state.framebuffer_bytes);
@@ -529,6 +653,30 @@ static IRAM_ATTR bool display_hal_flush_done_isr(esp_lcd_panel_io_handle_t panel
     return high_task_woken == pdTRUE;
 }
 
+#if CONFIG_SOC_LCD_RGB_SUPPORTED
+static IRAM_ATTR bool display_hal_flush_done_rgb_isr(esp_lcd_panel_handle_t panel,
+                                                     const esp_lcd_rgb_panel_event_data_t *edata,
+                                                     void *user_ctx)
+{
+    (void)panel;
+    (void)edata;
+    (void)user_ctx;
+    return display_hal_flush_done_isr(NULL, NULL, NULL);
+}
+#endif
+
+#if CONFIG_SOC_MIPI_DSI_SUPPORTED
+static IRAM_ATTR bool display_hal_flush_done_dpi_isr(esp_lcd_panel_handle_t panel,
+                                                     esp_lcd_dpi_panel_event_data_t *edata,
+                                                     void *user_ctx)
+{
+    (void)panel;
+    (void)edata;
+    (void)user_ctx;
+    return display_hal_flush_done_isr(NULL, NULL, NULL);
+}
+#endif
+
 static esp_err_t display_hal_wait_flush_done_locked(TickType_t timeout_ticks)
 {
     if (!s_state.flush_in_flight) {
@@ -555,6 +703,9 @@ static esp_err_t display_hal_submit_bitmap_locked(int x_start, int y_start,
                                                   int pending_framebuffer_index,
                                                   bool wait_for_done)
 {
+    const uint16_t *submit_pixels = pixels;
+    size_t pixel_count = 0;
+    uint16_t *swap_buffer = NULL;
     esp_err_t ret = display_hal_wait_flush_done_locked(pdMS_TO_TICKS(DISPLAY_HAL_FLUSH_TIMEOUT_MS));
     if (ret != ESP_OK) {
         return ret;
@@ -565,7 +716,16 @@ static esp_err_t display_hal_submit_bitmap_locked(int x_start, int y_start,
         }
     }
 
-    ret = esp_lcd_panel_draw_bitmap(s_state.panel, x_start, y_start, x_end, y_end, pixels);
+    if (display_hal_panel_requires_swap()) {
+        pixel_count = (size_t)(x_end - x_start) * (size_t)(y_end - y_start);
+        ESP_RETURN_ON_FALSE(s_state.submit_swap_buffer != NULL, ESP_ERR_INVALID_STATE, TAG,
+                            "submit swap buffer missing");
+        swap_buffer = s_state.submit_swap_buffer;
+        display_hal_bswap16_into(swap_buffer, pixels, pixel_count);
+        submit_pixels = swap_buffer;
+    }
+
+    ret = esp_lcd_panel_draw_bitmap(s_state.panel, x_start, y_start, x_end, y_end, submit_pixels);
     if (ret != ESP_OK) {
         return ret;
     }
@@ -689,7 +849,7 @@ static esp_err_t display_hal_ensure_painter_locked(void)
         },
         .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
         .default_font = display_hal_get_font(24),
-        .swap_rgb565 = true,
+        .swap_rgb565 = false,
     };
 
     if (s_state.painter) {
@@ -703,7 +863,6 @@ static esp_err_t display_hal_ensure_painter_locked(void)
 
 static esp_err_t display_hal_fill_rect_locked(int x, int y, int width, int height, uint16_t color565)
 {
-    uint16_t panel_color = display_hal_rgb565_to_panel(color565);
     uint16_t *framebuffer = display_hal_get_draw_framebuffer_locked();
 
     if (!display_hal_clip_rect_locked(&x, &y, &width, &height, NULL, NULL)) {
@@ -720,7 +879,7 @@ static esp_err_t display_hal_fill_rect_locked(int x, int y, int width, int heigh
         for (int row = 0; row < height; ++row) {
             uint16_t *dst = framebuffer + ((size_t)(y + row) * s_state.width) + x;
             for (int col = 0; col < width; ++col) {
-                dst[col] = panel_color;
+                dst[col] = color565;
             }
         }
         return ESP_OK;
@@ -729,7 +888,7 @@ static esp_err_t display_hal_fill_rect_locked(int x, int y, int width, int heigh
     uint16_t *line = malloc((size_t)width * sizeof(uint16_t));
     ESP_RETURN_ON_FALSE(line != NULL, ESP_ERR_NO_MEM, TAG, "line alloc failed");
     for (int i = 0; i < width; ++i) {
-        line[i] = panel_color;
+        line[i] = color565;
     }
     for (int row = 0; row < height; ++row) {
         esp_err_t ret = display_hal_submit_bitmap_locked(x, y + row, x + width, y + row + 1, line, -1, true);
@@ -1032,15 +1191,15 @@ static UINT display_hal_jpeg_output_cb(JDEC *decoder, void *bitmap, JRECT *rect)
         for (int x = rect->left; x <= rect->right; ++x) {
             uint16_t color =
                 (uint16_t)(((src[0] >> 3) << 11) | ((src[1] >> 2) << 5) | (src[2] >> 3));
-            *dst++ = __builtin_bswap16(color);
+            *dst++ = color;
             src += 3;
         }
     }
     return 1;
 }
 
-static esp_err_t display_hal_decode_jpeg_rgb565_be(const uint8_t *jpeg_data, size_t jpeg_len,
-                                                   uint16_t **pixels_out, int *out_w, int *out_h)
+static esp_err_t display_hal_decode_jpeg_rgb565(const uint8_t *jpeg_data, size_t jpeg_len,
+                                                uint16_t **pixels_out, int *out_w, int *out_h)
 {
     display_hal_jpeg_ctx_t ctx = {
         .data = jpeg_data,
@@ -1114,8 +1273,8 @@ cleanup:
 }
 #endif
 
-static esp_err_t display_hal_scale_rgb565_be(const uint16_t *src, int src_w, int src_h,
-                                             int dst_w, int dst_h, uint16_t **dst_out)
+static esp_err_t display_hal_scale_rgb565(const uint16_t *src, int src_w, int src_h,
+                                          int dst_w, int dst_h, uint16_t **dst_out)
 {
     uint16_t *dst = NULL;
 
@@ -1173,7 +1332,7 @@ esp_err_t display_hal_begin_frame(bool clear, uint16_t color565)
         draw_fb = display_hal_get_draw_framebuffer_locked();
         visible_fb = display_hal_get_visible_framebuffer_locked();
         if (clear || !s_state.framebuffer_initialized) {
-            display_hal_fill_framebuffer_locked(draw_fb, display_hal_rgb565_to_panel(color565));
+            display_hal_fill_framebuffer_locked(draw_fb, color565);
             s_state.framebuffer_initialized = true;
         } else if (draw_fb && visible_fb && draw_fb != visible_fb) {
             memcpy(draw_fb, visible_fb, s_state.framebuffer_bytes);
@@ -1391,11 +1550,10 @@ esp_err_t display_hal_fill_circle(int cx, int cy, int r, uint16_t color565)
         return ESP_OK;
     }
 
-    uint16_t panel_color = display_hal_rgb565_to_panel(color565);
     uint16_t *span = malloc((size_t)(r * 2 + 1) * sizeof(uint16_t));
     ESP_RETURN_ON_FALSE(span != NULL, ESP_ERR_NO_MEM, TAG, "circle span alloc failed");
     for (int i = 0; i < r * 2 + 1; ++i) {
-        span[i] = panel_color;
+        span[i] = color565;
     }
 
     esp_err_t ret = display_hal_lock();
@@ -1962,7 +2120,7 @@ esp_err_t display_hal_draw_text(int x, int y, const char *text, uint8_t font_siz
     }
     ESP_GOTO_ON_FALSE(buffer != NULL, ESP_ERR_NO_MEM, fail, TAG, "text buffer alloc failed");
 
-    fill_color = display_hal_rgb565_to_panel(has_bg ? bg_color565 : 0x0000);
+    fill_color = has_bg ? bg_color565 : 0x0000;
     for (size_t i = 0; i < aligned_buffer_bytes / sizeof(uint16_t); ++i) {
         buffer[i] = fill_color;
     }
@@ -2049,6 +2207,33 @@ esp_err_t display_hal_draw_bitmap_crop(int x, int y,
     return ret;
 }
 
+esp_err_t display_hal_draw_bitmap_scaled(int x, int y,
+                                         const uint16_t *pixels,
+                                         int src_width, int src_height,
+                                         int scale_w, int scale_h,
+                                         int *out_w, int *out_h)
+{
+    uint16_t *scaled = NULL;
+    esp_err_t ret = ESP_OK;
+
+    if (!pixels || src_width <= 0 || src_height <= 0 || scale_w <= 0 || scale_h <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ret = display_hal_scale_rgb565(pixels, src_width, src_height, scale_w, scale_h, &scaled);
+    if (ret == ESP_OK) {
+        ret = display_hal_draw_bitmap(x, y, scale_w, scale_h, scaled);
+    }
+    if (out_w) {
+        *out_w = scale_w;
+    }
+    if (out_h) {
+        *out_h = scale_h;
+    }
+    free(scaled);
+    return ret;
+}
+
 esp_err_t display_hal_draw_jpeg(int x, int y,
                                 const uint8_t *jpeg_data, size_t jpeg_len,
                                 int *out_w, int *out_h)
@@ -2065,7 +2250,7 @@ esp_err_t display_hal_draw_jpeg(int x, int y,
     uint16_t *pixels = NULL;
     int width = 0;
     int height = 0;
-    esp_err_t ret = display_hal_decode_jpeg_rgb565_be(jpeg_data, jpeg_len, &pixels, &width, &height);
+    esp_err_t ret = display_hal_decode_jpeg_rgb565(jpeg_data, jpeg_len, &pixels, &width, &height);
 
     if (ret != ESP_OK) {
         return ret;
@@ -2104,7 +2289,7 @@ esp_err_t display_hal_draw_jpeg_crop(int x, int y,
     uint16_t *pixels = NULL;
     int width = 0;
     int height = 0;
-    esp_err_t ret = display_hal_decode_jpeg_rgb565_be(jpeg_data, jpeg_len, &pixels, &width, &height);
+    esp_err_t ret = display_hal_decode_jpeg_rgb565(jpeg_data, jpeg_len, &pixels, &width, &height);
 
     if (ret != ESP_OK) {
         return ret;
@@ -2152,7 +2337,6 @@ esp_err_t display_hal_draw_jpeg_scaled(int x, int y,
     return ESP_ERR_NOT_SUPPORTED;
 #else
     uint16_t *pixels = NULL;
-    uint16_t *scaled = NULL;
     int width = 0;
     int height = 0;
     esp_err_t ret = ESP_OK;
@@ -2161,22 +2345,12 @@ esp_err_t display_hal_draw_jpeg_scaled(int x, int y,
         return ESP_ERR_INVALID_ARG;
     }
 
-    ret = display_hal_decode_jpeg_rgb565_be(jpeg_data, jpeg_len, &pixels, &width, &height);
+    ret = display_hal_decode_jpeg_rgb565(jpeg_data, jpeg_len, &pixels, &width, &height);
     if (ret != ESP_OK) {
         return ret;
     }
-    ret = display_hal_scale_rgb565_be(pixels, width, height, scale_w, scale_h, &scaled);
-    if (ret == ESP_OK) {
-        ret = display_hal_draw_bitmap(x, y, scale_w, scale_h, scaled);
-    }
-    if (out_w) {
-        *out_w = scale_w;
-    }
-    if (out_h) {
-        *out_h = scale_h;
-    }
+    ret = display_hal_draw_bitmap_scaled(x, y, pixels, width, height, scale_w, scale_h, out_w, out_h);
     free(pixels);
-    free(scaled);
     return ret;
 #endif
 }

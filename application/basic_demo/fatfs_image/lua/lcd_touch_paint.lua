@@ -3,13 +3,13 @@ local display = require("display")
 local lcd_touch = require("lcd_touch")
 local delay = require("delay")
 
-local panel_handle, io_handle, width, height = bm.get_display_lcd_params("display_lcd")
+local panel_handle, io_handle, width, height, panel_if = bm.get_display_lcd_params("display_lcd")
 if not panel_handle then
     print("[lcd_touch_paint] ERROR: get_display_lcd_params(display_lcd) failed: " .. tostring(io_handle))
     return
 end
 
-local ok, err = pcall(display.init, panel_handle, io_handle, width, height)
+local ok, err = pcall(display.init, panel_handle, io_handle, width, height, panel_if)
 if not ok then
     print("[lcd_touch_paint] ERROR: init failed: " .. tostring(err))
     return

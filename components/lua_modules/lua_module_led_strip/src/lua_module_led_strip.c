@@ -19,6 +19,78 @@ typedef struct {
     led_strip_handle_t strip;
 } lua_module_led_strip_ud_t;
 
+static void lua_module_led_strip_hsv_to_rgb(uint32_t hue, uint32_t saturation, uint32_t value,
+                                            uint32_t *red, uint32_t *green, uint32_t *blue)
+{
+    uint32_t region = 0;
+    uint32_t remainder = 0;
+    uint32_t p = 0;
+    uint32_t q = 0;
+    uint32_t t = 0;
+
+    if (red) {
+        *red = 0;
+    }
+    if (green) {
+        *green = 0;
+    }
+    if (blue) {
+        *blue = 0;
+    }
+
+    if (!red || !green || !blue) {
+        return;
+    }
+
+    if (saturation == 0) {
+        *red = value;
+        *green = value;
+        *blue = value;
+        return;
+    }
+
+    hue %= 360;
+    region = hue / 60;
+    remainder = ((hue % 60) * 255) / 60;
+
+    p = (value * (255 - saturation)) / 255;
+    q = (value * (255 - ((saturation * remainder) / 255))) / 255;
+    t = (value * (255 - ((saturation * (255 - remainder)) / 255))) / 255;
+
+    switch (region) {
+    case 0:
+        *red = value;
+        *green = t;
+        *blue = p;
+        break;
+    case 1:
+        *red = q;
+        *green = value;
+        *blue = p;
+        break;
+    case 2:
+        *red = p;
+        *green = value;
+        *blue = t;
+        break;
+    case 3:
+        *red = p;
+        *green = q;
+        *blue = value;
+        break;
+    case 4:
+        *red = t;
+        *green = p;
+        *blue = value;
+        break;
+    default:
+        *red = value;
+        *green = p;
+        *blue = q;
+        break;
+    }
+}
+
 static lua_module_led_strip_ud_t *lua_module_led_strip_get_ud(lua_State *L, int idx)
 {
     lua_module_led_strip_ud_t *ud =
@@ -50,6 +122,30 @@ static int lua_module_led_strip_set_pixel(lua_State *L)
     esp_err_t err = led_strip_set_pixel(ud->strip, index, r, g, b);
     if (err != ESP_OK) {
         return luaL_error(L, "led_strip set_pixel failed: %s", esp_err_to_name(err));
+    }
+    return 0;
+}
+
+static int lua_module_led_strip_set_pixel_hsv(lua_State *L)
+{
+    lua_module_led_strip_ud_t *ud = lua_module_led_strip_get_ud(L, 1);
+    uint32_t index = (uint32_t)luaL_checkinteger(L, 2);
+    uint32_t hue = (uint32_t)luaL_checkinteger(L, 3);
+    uint32_t saturation = (uint32_t)luaL_checkinteger(L, 4);
+    uint32_t value = (uint32_t)luaL_checkinteger(L, 5);
+    uint32_t red = 0;
+    uint32_t green = 0;
+    uint32_t blue = 0;
+
+    if (saturation > 255 || value > 255) {
+        return luaL_error(L, "led_strip set_pixel_hsv requires s and v in range 0-255");
+    }
+
+    lua_module_led_strip_hsv_to_rgb(hue, saturation, value, &red, &green, &blue);
+
+    esp_err_t err = led_strip_set_pixel(ud->strip, index, red, green, blue);
+    if (err != ESP_OK) {
+        return luaL_error(L, "led_strip set_pixel_hsv failed: %s", esp_err_to_name(err));
     }
     return 0;
 }
@@ -136,6 +232,8 @@ int luaopen_led_strip(lua_State *L)
         lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, lua_module_led_strip_set_pixel);
         lua_setfield(L, -2, "set_pixel");
+        lua_pushcfunction(L, lua_module_led_strip_set_pixel_hsv);
+        lua_setfield(L, -2, "set_pixel_hsv");
         lua_pushcfunction(L, lua_module_led_strip_refresh);
         lua_setfield(L, -2, "refresh");
         lua_pushcfunction(L, lua_module_led_strip_clear);

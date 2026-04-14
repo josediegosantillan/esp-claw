@@ -41,10 +41,17 @@ typedef struct {
     bool flush_in_flight;
 } display_hal_animation_info_t;
 
+typedef enum {
+    DISPLAY_HAL_PANEL_IF_IO = 0,
+    DISPLAY_HAL_PANEL_IF_RGB,
+    DISPLAY_HAL_PANEL_IF_MIPI_DSI,
+} display_hal_panel_if_t;
+
 /* --- Lifecycle --- */
 
 esp_err_t display_hal_create(esp_lcd_panel_handle_t panel_handle,
                              esp_lcd_panel_io_handle_t io_handle,
+                             display_hal_panel_if_t panel_if,
                              int lcd_width,
                              int lcd_height);
 esp_err_t display_hal_destroy(void);
@@ -113,6 +120,11 @@ esp_err_t display_hal_draw_bitmap_crop(int x, int y,
                                        int w, int h,
                                        int src_width, int src_height,
                                        const uint16_t *pixels);
+esp_err_t display_hal_draw_bitmap_scaled(int x, int y,
+                                         const uint16_t *pixels,
+                                         int src_width, int src_height,
+                                         int scale_w, int scale_h,
+                                         int *out_w, int *out_h);
 
 /* --- JPEG --- */
 

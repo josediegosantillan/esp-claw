@@ -11,9 +11,9 @@
 #include "esp_board_manager_includes.h"
 #include "cap_lua.h"
 
-/* --------------------------------------------------------------------------
- * Helpers
- * -------------------------------------------------------------------------- */
+#define LUA_BM_DISPLAY_PANEL_IF_IO        0
+#define LUA_BM_DISPLAY_PANEL_IF_RGB       1
+#define LUA_BM_DISPLAY_PANEL_IF_MIPI_DSI  2
 
 /** Push nil + error message string, return 2. Convenience for error paths. */
 static int push_err(lua_State *L, esp_err_t err, const char *msg)
@@ -171,7 +171,7 @@ static int lua_bm_get_device_config_handle(lua_State *L)
 
 /* --------------------------------------------------------------------------
  * board_manager.get_display_lcd_params(name)
- *   -> panel_handle, io_handle, lcd_width, lcd_height | nil, errmsg
+ *   -> panel_handle, io_handle, lcd_width, lcd_height, panel_if | nil, errmsg
  * -------------------------------------------------------------------------- */
 static int lua_bm_get_display_lcd_params(lua_State *L)
 {
@@ -195,17 +195,33 @@ static int lua_bm_get_display_lcd_params(lua_State *L)
         lua_pushfstring(L, "display_lcd '%s' handle/config is NULL", name);
         return 2;
     }
-    if (lcd_handles->panel_handle == NULL || lcd_handles->io_handle == NULL) {
+    if (lcd_handles->panel_handle == NULL) {
         lua_pushnil(L);
-        lua_pushfstring(L, "display_lcd '%s' panel/io handle is NULL", name);
+        lua_pushfstring(L, "display_lcd '%s' panel handle is NULL", name);
         return 2;
     }
 
     lua_pushlightuserdata(L, lcd_handles->panel_handle);
-    lua_pushlightuserdata(L, lcd_handles->io_handle);
+    if (lcd_handles->io_handle != NULL) {
+        lua_pushlightuserdata(L, lcd_handles->io_handle);
+    } else {
+        lua_pushnil(L);
+    }
+    const char *sub_type = lcd_cfg->sub_type;
+    int panel_if = LUA_BM_DISPLAY_PANEL_IF_IO;
+
+    if (sub_type != NULL) {
+        if (strcmp(sub_type, "dsi") == 0 || strcmp(sub_type, "mipi_dsi") == 0) {
+            panel_if = LUA_BM_DISPLAY_PANEL_IF_MIPI_DSI;
+        } else if (strcmp(sub_type, "rgb") == 0) {
+            panel_if = LUA_BM_DISPLAY_PANEL_IF_RGB;
+        }
+    }
+
     lua_pushinteger(L, lcd_cfg->lcd_width);
     lua_pushinteger(L, lcd_cfg->lcd_height);
-    return 4;
+    lua_pushinteger(L, panel_if);
+    return 5;
 #else
     lua_pushnil(L);
     lua_pushstring(L, "display lcd support is disabled");
@@ -455,6 +471,12 @@ int luaopen_board_manager(lua_State *L)
 
     lua_newtable(L);
     luaL_setfuncs(L, funcs, 0);
+    lua_pushinteger(L, LUA_BM_DISPLAY_PANEL_IF_IO);
+    lua_setfield(L, -2, "PANEL_IF_IO");
+    lua_pushinteger(L, LUA_BM_DISPLAY_PANEL_IF_RGB);
+    lua_setfield(L, -2, "PANEL_IF_RGB");
+    lua_pushinteger(L, LUA_BM_DISPLAY_PANEL_IF_MIPI_DSI);
+    lua_setfield(L, -2, "PANEL_IF_MIPI_DSI");
     return 1;
 }
 

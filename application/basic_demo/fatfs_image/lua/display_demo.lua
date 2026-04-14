@@ -28,13 +28,13 @@ local function wait_frame(ms)
     delay.delay_ms(ms)
 end
 
-local panel_handle, io_handle, width, height = bm.get_display_lcd_params("display_lcd")
+local panel_handle, io_handle, width, height, panel_if = bm.get_display_lcd_params("display_lcd")
 if not panel_handle then
     print("[display_demo] ERROR: get_display_lcd_params(display_lcd) failed: " .. tostring(io_handle))
     return
 end
 
-local ok, err = pcall(display.init, panel_handle, io_handle, width, height)
+local ok, err = pcall(display.init, panel_handle, io_handle, width, height, panel_if)
 if not ok then
     print("[display_demo] ERROR: init failed: " .. tostring(err))
     return

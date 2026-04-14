@@ -17,10 +17,10 @@ In this project, `display` is usually used together with `board_manager`:
 local board_manager = require("board_manager")
 local display = require("display")
 
-local panel_handle, io_handle, width, height =
+local panel_handle, io_handle, width, height, panel_if =
     board_manager.get_display_lcd_params("display_lcd")
 
-display.init(panel_handle, io_handle, width, height)
+display.init(panel_handle, io_handle, width, height, panel_if)
 ```
 
 After `display.init(...)` succeeds:
@@ -47,14 +47,16 @@ pcall(display.deinit)
 
 ## Screen lifecycle
 
-### `display.init(panel_handle, io_handle, lcd_width, lcd_height)`
+### `display.init(panel_handle, io_handle, lcd_width, lcd_height[, panel_if])`
 
 Initializes the drawing context.
 
 - `panel_handle`: lightuserdata, usually from `board_manager.get_display_lcd_params(...)`
-- `io_handle`: lightuserdata
+- `io_handle`: lightuserdata or `nil`
 - `lcd_width`: integer
 - `lcd_height`: integer
+- `panel_if`: optional interface constant, usually returned by `board_manager.get_display_lcd_params(...)`
+- Common values come from `board_manager.PANEL_IF_IO`, `board_manager.PANEL_IF_RGB`, and `board_manager.PANEL_IF_MIPI_DSI`
 - Returns `true` on success
 - Raises a Lua error on failure
 
@@ -280,18 +282,10 @@ These APIs draw RGB565 pixel buffers.
 
 Draws a raw RGB565 bitmap.
 
-- `data` is a Lua string containing exactly `w * h * 2` bytes or more
-- Byte order must be RGB565, MSB-first
+- `data` is either a Lua string containing exactly `w * h * 2` bytes or more, or a `lightuserdata` pointer to a buffer of that size
+- Byte order must be RGB565 little-endian
 
 If the byte string is shorter than required, the API raises an error.
-
-### `display.draw_bitmap_le(x, y, w, h, data)`
-
-Same as `draw_bitmap(...)`, but input data is little-endian RGB565.
-
-The module swaps bytes internally before drawing.
-
-Use this when your pixel buffer is generated in little-endian order.
 
 ### `display.draw_bitmap_crop(x, y, src_x, src_y, width, height, src_width, src_height, data)`
 
@@ -303,11 +297,35 @@ Arguments:
 - `width`, `height`: crop size to draw
 - `src_width`, `src_height`: full source image size
 - `data`: source RGB565 data buffer
+- `data` may be a Lua string or `lightuserdata`
 
 Notes:
 - `data` must contain the full source image, not just the crop
 - Required byte size is `src_width * src_height * 2`
-- This API does not have a `_le` variant, so the source buffer should already match the format expected by the HAL
+- Input data is RGB565 little-endian
+
+### `display.draw_rgb565_crop(x, y, src_x, src_y, width, height, src_width, src_height, data)`
+
+Alias-style crop API for in-memory RGB565 data, matching the JPEG crop naming pattern.
+
+- Returns `width, height`
+
+### `display.draw_rgb565_scaled(x, y, src_width, src_height, scale_w, scale_h, data)`
+
+Scales an in-memory RGB565 image to the requested output size.
+
+- `data` may be a Lua string or `lightuserdata`
+- Returns `output_w, output_h`
+
+### `display.draw_rgb565_fit(x, y, src_width, src_height, max_w, max_h, data)`
+
+Scales an in-memory RGB565 image to fit within `max_w x max_h` while preserving aspect ratio.
+
+- If the original image already fits, it is drawn at full resolution
+- Otherwise the module computes a scaled size automatically
+- For larger outputs, the chosen scaled size is aligned down to multiples of `8` when possible
+- `data` may be a Lua string or `lightuserdata`
+- Returns `output_w, output_h`
 
 ## JPEG and PNG APIs
 
@@ -403,10 +421,10 @@ For normal screen rendering:
 local bm = require("board_manager")
 local display = require("display")
 
-local panel_handle, io_handle, width, height =
+local panel_handle, io_handle, width, height, panel_if =
     bm.get_display_lcd_params("display_lcd")
 
-display.init(panel_handle, io_handle, width, height)
+display.init(panel_handle, io_handle, width, height, panel_if)
 
 display.begin_frame({ clear = true, r = 12, g = 18, b = 28 })
 

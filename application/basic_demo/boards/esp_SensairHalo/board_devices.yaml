@@ -121,7 +121,7 @@ devices:
       adc_enabled: true
       dac_enabled: false
       adc_local_cfg:
-        channel_list: [4]          # required
+        channel_list: [3]          # required
         sample_rate_hz: 16000
         max_store_buf_size: 1024
         conv_frame_size: 256

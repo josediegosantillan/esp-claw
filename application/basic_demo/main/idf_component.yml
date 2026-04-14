@@ -3,6 +3,14 @@ dependencies:
   espressif/esp_board_manager:
     version: "^0.5.7"
     public: true
+  espressif/esp_wifi_remote:
+    version: ">=0.10,<2.0"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_hosted:
+    version: "~2"
+    rules:
+      - if: "target in [esp32p4]"
 
   cap_cli:
     path: ../../../components/claw_capabilities/cap_cli
