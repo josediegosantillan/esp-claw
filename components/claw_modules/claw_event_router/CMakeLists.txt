@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "src/claw_event.c"
         "src/claw_event_router.c"
     INCLUDE_DIRS
         "include"

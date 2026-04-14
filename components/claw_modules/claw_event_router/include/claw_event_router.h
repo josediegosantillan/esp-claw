@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "claw_cap.h"
+#include "claw_event.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 
@@ -18,33 +19,6 @@ extern "C" {
 #endif
 
 #define CLAW_EVENT_ROUTER_DEFAULT_RULES_PATH "/fatfs/data/automation/automations.json"
-
-typedef enum {
-    CLAW_EVENT_SESSION_POLICY_CHAT = 0,
-    CLAW_EVENT_SESSION_POLICY_TRIGGER = 1,
-    CLAW_EVENT_SESSION_POLICY_GLOBAL = 2,
-    CLAW_EVENT_SESSION_POLICY_EPHEMERAL = 3,
-    CLAW_EVENT_SESSION_POLICY_NOSAVE = 4,
-} claw_event_session_policy_t;
-
-typedef struct {
-    char event_id[48];
-    char source_cap[32];
-    char event_type[32];
-    char source_channel[16];
-    char target_channel[16];
-    char source_endpoint[64];
-    char target_endpoint[96];
-    char chat_id[96];
-    char sender_id[96];
-    char message_id[96];
-    char correlation_id[96];
-    char content_type[24];
-    int64_t timestamp_ms;
-    claw_event_session_policy_t session_policy;
-    char *text;
-    char *payload_json;
-} claw_event_t;
 
 typedef size_t (*claw_event_router_session_builder_fn)(const claw_event_t *event,
                                                        char *buf,
@@ -132,17 +106,6 @@ esp_err_t claw_event_router_init(const claw_event_router_config_t *config);
 esp_err_t claw_event_router_start(void);
 esp_err_t claw_event_router_stop(void);
 esp_err_t claw_event_router_reload(void);
-esp_err_t claw_event_router_publish(const claw_event_t *event);
-esp_err_t claw_event_router_publish_message(const char *source_cap,
-                                            const char *channel,
-                                            const char *chat_id,
-                                            const char *text,
-                                            const char *sender_id,
-                                            const char *message_id);
-esp_err_t claw_event_router_publish_trigger(const char *source_cap,
-                                            const char *event_type,
-                                            const char *event_key,
-                                            const char *payload_json);
 esp_err_t claw_event_router_register_outbound_binding(const char *channel,
                                                       const char *cap_name);
 esp_err_t claw_event_router_handle_event(const claw_event_t *event,
@@ -160,11 +123,6 @@ esp_err_t claw_event_router_get_rule_json(const char *id, char *output, size_t o
 esp_err_t claw_event_router_get_last_result(claw_event_router_result_t *out_result);
 void claw_event_router_free_rule(claw_event_router_rule_t *rule);
 void claw_event_router_free_rule_list(claw_event_router_rule_t *rules, size_t rule_count);
-void claw_event_router_free_event(claw_event_t *event);
-size_t claw_event_router_build_session_id(const claw_event_t *event,
-                                          char *buf,
-                                          size_t buf_size);
-const char *claw_event_router_session_policy_to_string(claw_event_session_policy_t policy);
 
 #ifdef __cplusplus
 }

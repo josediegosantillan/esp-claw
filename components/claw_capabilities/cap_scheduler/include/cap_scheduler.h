@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "claw_event_router.h"
+#include "claw_event_publisher.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 
@@ -75,7 +75,7 @@ typedef struct {
     esp_err_t last_error_code;
 } cap_scheduler_snapshot_t;
 
-typedef esp_err_t (*cap_scheduler_publish_fn)(const claw_event_t *event);
+typedef claw_event_publish_fn cap_scheduler_publish_fn;
 
 typedef struct {
     const char *schedules_path;
@@ -86,7 +86,7 @@ typedef struct {
     uint32_t task_stack_size;
     UBaseType_t task_priority;
     BaseType_t task_core;
-    cap_scheduler_publish_fn publish_event;
+    claw_event_publish_fn publish_event;
     bool persist_after_fire;
 } cap_scheduler_config_t;
 

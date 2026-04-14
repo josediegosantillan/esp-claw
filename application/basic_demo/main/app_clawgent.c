@@ -27,6 +27,7 @@
 #include "cap_skill.h"
 #include "cap_time.h"
 #include "cap_web_search.h"
+#include "claw_event_publisher.h"
 #include "claw_event_router.h"
 #include "claw_cap.h"
 #include "claw_core.h"

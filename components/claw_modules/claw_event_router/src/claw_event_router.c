@@ -18,6 +18,7 @@
 
 #include "cJSON.h"
 #include "claw_core.h"
+#include "claw_event_publisher.h"
 #include "esp_log.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -404,24 +405,6 @@ static bool claw_event_router_parse_session_policy(const char *value,
         return true;
     }
     return false;
-}
-
-const char *claw_event_router_session_policy_to_string(claw_event_session_policy_t policy)
-{
-    switch (policy) {
-    case CLAW_EVENT_SESSION_POLICY_CHAT:
-        return "chat";
-    case CLAW_EVENT_SESSION_POLICY_TRIGGER:
-        return "trigger";
-    case CLAW_EVENT_SESSION_POLICY_GLOBAL:
-        return "global";
-    case CLAW_EVENT_SESSION_POLICY_EPHEMERAL:
-        return "ephemeral";
-    case CLAW_EVENT_SESSION_POLICY_NOSAVE:
-        return "nosave";
-    default:
-        return "chat";
-    }
 }
 
 static esp_err_t claw_event_router_parse_action(const cJSON *item,
@@ -1000,7 +983,7 @@ static cJSON *claw_event_router_build_event_context(const claw_event_t *event)
     cJSON_AddStringToObject(event_obj, "correlation_id", event->correlation_id);
     cJSON_AddStringToObject(event_obj, "content_type", event->content_type);
     cJSON_AddStringToObject(event_obj, "session_policy",
-                            claw_event_router_session_policy_to_string(event->session_policy));
+                            claw_event_session_policy_to_string(event->session_policy));
     cJSON_AddNumberToObject(event_obj, "timestamp_ms", (double)event->timestamp_ms);
     cJSON_AddStringToObject(event_obj, "text", event->text ? event->text : "");
 
@@ -1208,75 +1191,6 @@ static cJSON *claw_event_router_render_json(const cJSON *input, const cJSON *ctx
     return cJSON_Duplicate((cJSON *)input, 1);
 }
 
-static esp_err_t claw_event_router_clone_event(const claw_event_t *src, claw_event_t *dst)
-{
-    memset(dst, 0, sizeof(*dst));
-    memcpy(dst, src, sizeof(*dst));
-    dst->text = NULL;
-    dst->payload_json = NULL;
-
-    if (src->text) {
-        dst->text = strdup(src->text);
-        if (!dst->text) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    if (src->payload_json) {
-        dst->payload_json = strdup(src->payload_json);
-        if (!dst->payload_json) {
-            free(dst->text);
-            dst->text = NULL;
-            return ESP_ERR_NO_MEM;
-        }
-    }
-    return ESP_OK;
-}
-
-void claw_event_router_free_event(claw_event_t *event)
-{
-    if (!event) {
-        return;
-    }
-    free(event->text);
-    free(event->payload_json);
-    memset(event, 0, sizeof(*event));
-}
-
-size_t claw_event_router_build_session_id(const claw_event_t *event,
-                                          char *buf,
-                                          size_t buf_size)
-{
-    if (!buf || buf_size == 0 || !event) {
-        return 0;
-    }
-
-    switch (event->session_policy) {
-    case CLAW_EVENT_SESSION_POLICY_CHAT:
-        snprintf(buf, buf_size, "%s:%s", event->source_channel, event->chat_id);
-        break;
-    case CLAW_EVENT_SESSION_POLICY_TRIGGER:
-        snprintf(buf, buf_size, "trigger:%s:%s",
-                 event->source_cap[0] ? event->source_cap : "system",
-                 claw_event_router_event_key(event));
-        break;
-    case CLAW_EVENT_SESSION_POLICY_GLOBAL:
-        snprintf(buf, buf_size, "global:%s",
-                 event->source_cap[0] ? event->source_cap : "router");
-        break;
-    case CLAW_EVENT_SESSION_POLICY_EPHEMERAL:
-        snprintf(buf, buf_size, "ephemeral:%s", event->event_id);
-        break;
-    case CLAW_EVENT_SESSION_POLICY_NOSAVE:
-        buf[0] = '\0';
-        return 0;
-    default:
-        snprintf(buf, buf_size, "%s:%s", event->source_channel, event->chat_id);
-        break;
-    }
-
-    return strlen(buf);
-}
-
 static size_t claw_event_router_build_session_id_with_config(const claw_event_t *event,
                                                              char *buf,
                                                              size_t buf_size)
@@ -1287,7 +1201,7 @@ static size_t claw_event_router_build_session_id_with_config(const claw_event_t 
                                                 buf_size,
                                                 s_runtime.config.session_builder_user_ctx);
     }
-    return claw_event_router_build_session_id(event, buf, buf_size);
+    return claw_event_build_session_id(event, buf, buf_size);
 }
 
 static esp_err_t claw_event_router_default_outbound_resolver(const claw_event_t *event,
@@ -1986,7 +1900,7 @@ static void claw_event_router_task(void *arg)
         if (claw_event_router_process_event(&event, &result) != ESP_OK) {
             ESP_LOGW(TAG, "Failed to process event %s", event.event_id);
         }
-        claw_event_router_free_event(&event);
+        claw_event_free(&event);
     }
 
     s_runtime.task_handle = NULL;
@@ -2141,12 +2055,12 @@ esp_err_t claw_event_router_publish(const claw_event_t *event)
         return ESP_ERR_INVALID_ARG;
     }
 
-    err = claw_event_router_clone_event(event, &cloned);
+    err = claw_event_clone(event, &cloned);
     if (err != ESP_OK) {
         return err;
     }
     if (xQueueSend(s_runtime.event_queue, &cloned, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        claw_event_router_free_event(&cloned);
+        claw_event_free(&cloned);
         return ESP_ERR_TIMEOUT;
     }
 

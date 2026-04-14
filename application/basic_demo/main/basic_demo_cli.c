@@ -23,6 +23,7 @@
 #include "cmd_cap_web_search.h"
 #include "claw_cap.h"
 #include "claw_core.h"
+#include "claw_event_publisher.h"
 #include "claw_event_router.h"
 #include "cJSON.h"
 #include "esp_console.h"

@@ -17,7 +17,7 @@
 #include "cap_im_attachment.h"
 #include "cJSON.h"
 #include "claw_cap.h"
-#include "claw_event_router.h"
+#include "claw_event_publisher.h"
 #include "esp_crt_bundle.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"

@@ -18,8 +18,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#include "claw_event_router.h"
 #include "claw_core_llm.h"
+#include "claw_event_publisher.h"
 
 static const char *TAG = "claw_core";
 

@@ -7,7 +7,7 @@
 
 #include <stddef.h>
 
-#include "claw_event_router.h"
+#include "claw_event.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus

@@ -17,7 +17,7 @@
 #include <sys/types.h>
 
 #include "cJSON.h"
-#include "claw_event_router.h"
+#include "claw_event_publisher.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"

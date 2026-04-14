@@ -13,7 +13,7 @@
 
 #include "cJSON.h"
 #include "claw_cap.h"
-#include "claw_event_router.h"
+#include "claw_event_publisher.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_log.h"

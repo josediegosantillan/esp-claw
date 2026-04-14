@@ -14,6 +14,7 @@
 #include "argtable3/argtable3.h"
 #include "cJSON.h"
 #include "claw_cap.h"
+#include "claw_event_publisher.h"
 #include "claw_event_router.h"
 #include "esp_console.h"
 

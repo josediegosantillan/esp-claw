@@ -456,7 +456,7 @@ size_t cap_session_mng_build_session_id(const claw_event_t *event,
         return 0;
     }
     if (!cap_session_mng_is_chat_event(event) || !s_session_mng.configured || !s_session_mng.mutex) {
-        return claw_event_router_build_session_id(event, buf, buf_size);
+        return claw_event_build_session_id(event, buf, buf_size);
     }
 
     xSemaphoreTakeRecursive(s_session_mng.mutex, portMAX_DELAY);
@@ -471,7 +471,7 @@ size_t cap_session_mng_build_session_id(const claw_event_t *event,
                  event->source_channel,
                  event->chat_id,
                  esp_err_to_name(err));
-        return claw_event_router_build_session_id(event, buf, buf_size);
+        return claw_event_build_session_id(event, buf, buf_size);
     }
 
     return strlen(buf);
