@@ -66,7 +66,6 @@ typedef struct {
     char lua_root_dir[64];
     char router_rules_path[96];
     char scheduler_rules_path[96];
-    char scheduler_state_path[96];
     char im_attachment_root[64];
 } basic_demo_paths_t;
 
@@ -82,7 +81,6 @@ static esp_err_t basic_demo_init_paths(basic_demo_paths_t *paths)
         snprintf(paths->lua_root_dir, sizeof(paths->lua_root_dir), "%s/scripts", base) >= sizeof(paths->lua_root_dir) ||
         snprintf(paths->router_rules_path, sizeof(paths->router_rules_path), "%s/router_rules/router_rules.json", base) >= sizeof(paths->router_rules_path) ||
         snprintf(paths->scheduler_rules_path, sizeof(paths->scheduler_rules_path), "%s/scheduler/schedules.json", base) >= sizeof(paths->scheduler_rules_path) ||
-        snprintf(paths->scheduler_state_path, sizeof(paths->scheduler_state_path), "%s/scheduler/scheduler_state.json", base) >= sizeof(paths->scheduler_state_path) ||
         snprintf(paths->im_attachment_root, sizeof(paths->im_attachment_root), "%s/inbox", base) >= sizeof(paths->im_attachment_root)) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -285,7 +283,6 @@ esp_err_t app_claw_start(const basic_demo_settings_t *settings)
     ESP_RETURN_ON_ERROR(claw_event_router_init(&router_config), TAG, "Failed to init event router");
     ESP_RETURN_ON_ERROR(cap_scheduler_init(&(cap_scheduler_config_t){
                             .schedules_path = paths.scheduler_rules_path,
-                            .state_path = paths.scheduler_state_path,
                             .default_timezone = settings->time_timezone,
                             .tick_ms = 1000,
                             .max_items = 32,

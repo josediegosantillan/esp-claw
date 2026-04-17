@@ -79,7 +79,6 @@ typedef claw_event_publish_fn cap_scheduler_publish_fn;
 
 typedef struct {
     const char *schedules_path;
-    const char *state_path;
     const char *default_timezone;
     uint32_t tick_ms;
     uint32_t max_items;

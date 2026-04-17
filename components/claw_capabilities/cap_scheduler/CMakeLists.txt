@@ -11,4 +11,5 @@ idf_component_register(
         claw_event_router
         console
         json
+        nvs_flash
 )

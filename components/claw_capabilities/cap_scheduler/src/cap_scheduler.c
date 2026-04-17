@@ -3,13 +3,12 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "cap_scheduler_internal.h"
-
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "cap_scheduler_internal.h"
 #include "claw_cap.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -282,10 +281,7 @@ static esp_err_t cap_scheduler_persist_all_locked(void)
 
 static esp_err_t cap_scheduler_load_runtime_state_locked(bool *runtime_state_loaded)
 {
-    char backup_path[CAP_SCHEDULER_PATH_BUF_LEN] = {0};
     esp_err_t primary_err;
-    esp_err_t backup_err;
-    bool recovery_warning_logged = false;
 
     if (!runtime_state_loaded) {
         return ESP_ERR_INVALID_ARG;
@@ -302,58 +298,14 @@ static esp_err_t cap_scheduler_load_runtime_state_locked(bool *runtime_state_loa
         return ESP_OK;
     }
 
-    if (primary_err == ESP_ERR_INVALID_RESPONSE) {
-        ESP_LOGW(TAG,
-                 "Scheduler state file %s is invalid, trying backup",
-                 s_cap_scheduler.state_path);
-        recovery_warning_logged = true;
-    } else if (primary_err != ESP_ERR_NOT_FOUND) {
+    if (primary_err != ESP_ERR_NOT_FOUND) {
         ESP_LOGW(TAG, "Failed to load scheduler state from %s: %s",
                  s_cap_scheduler.state_path,
                  esp_err_to_name(primary_err));
-        recovery_warning_logged = true;
-    } else {
-        recovery_warning_logged = true;
-    }
-
-    if (cap_scheduler_build_aux_path(s_cap_scheduler.state_path,
-                                     CAP_SCHEDULER_STATE_BACKUP_SUFFIX,
-                                     backup_path,
-                                     sizeof(backup_path)) != ESP_OK) {
-        return ESP_OK;
-    }
-
-    backup_err = cap_scheduler_load_state(backup_path,
-                                          s_cap_scheduler.entries,
-                                          s_cap_scheduler.max_items);
-    if (backup_err == ESP_OK) {
-        *runtime_state_loaded = true;
-        ESP_LOGW(TAG,
-                 "Primary runtime state unavailable, recovered scheduler runtime state from backup %s",
-                 backup_path);
-        return ESP_OK;
-    }
-
-    if (backup_err == ESP_ERR_INVALID_RESPONSE) {
-        ESP_LOGW(TAG, "Scheduler backup state file %s is invalid, continuing without runtime state",
-                 backup_path);
-    } else if (backup_err != ESP_ERR_NOT_FOUND) {
-        ESP_LOGW(TAG, "Failed to load scheduler backup state from %s: %s",
-                 backup_path,
-                 esp_err_to_name(backup_err));
-    }
-
-    if (primary_err == ESP_ERR_INVALID_RESPONSE || primary_err == ESP_ERR_NOT_FOUND) {
-        if (recovery_warning_logged) {
-            ESP_LOGW(TAG,
-                     "Primary and backup runtime state unavailable, rebuilding runtime state from %s only",
-                     s_cap_scheduler.schedules_path);
-        }
-        return ESP_OK;
     }
 
     ESP_LOGW(TAG,
-             "Primary and backup runtime state unavailable, rebuilding runtime state from %s only",
+             "Runtime state unavailable, rebuilding runtime state from %s only",
              s_cap_scheduler.schedules_path);
     return ESP_OK;
 }
@@ -765,12 +717,11 @@ esp_err_t cap_scheduler_register_group(void)
 esp_err_t cap_scheduler_init(const cap_scheduler_config_t *config)
 {
     const char *schedules_path = NULL;
-    const char *state_path = NULL;
 
     if (s_cap_scheduler.initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (!config || !config->schedules_path || !config->schedules_path[0] || !config->state_path || !config->state_path[0]) {
+    if (!config || !config->schedules_path || !config->schedules_path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -795,12 +746,12 @@ esp_err_t cap_scheduler_init(const cap_scheduler_config_t *config)
     s_cap_scheduler.config.task_priority = s_cap_scheduler.config.task_priority ?
                                            s_cap_scheduler.config.task_priority : CAP_SCHEDULER_DEFAULT_PRIORITY;
     s_cap_scheduler.config.task_core = config ? config->task_core : tskNO_AFFINITY;
-    s_cap_scheduler.config.persist_after_fire = true;
 
     schedules_path = config->schedules_path;
-    state_path = config->state_path;
     strlcpy(s_cap_scheduler.schedules_path, schedules_path, sizeof(s_cap_scheduler.schedules_path));
-    strlcpy(s_cap_scheduler.state_path, state_path, sizeof(s_cap_scheduler.state_path));
+    ESP_RETURN_ON_ERROR(cap_scheduler_build_state_path(schedules_path, s_cap_scheduler.state_path, sizeof(s_cap_scheduler.state_path)),
+                        TAG,
+                        "Failed to derive scheduler state key");
     strlcpy(s_cap_scheduler.default_timezone,
             config && config->default_timezone ? config->default_timezone : CAP_SCHEDULER_DEFAULT_TIMEZONE,
             sizeof(s_cap_scheduler.default_timezone));

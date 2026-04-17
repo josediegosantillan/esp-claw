@@ -1,4 +1,3 @@
-#include "cap_scheduler_internal.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -9,9 +8,21 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "cap_scheduler_internal.h"
 #include "esp_log.h"
+#include "nvs.h"
 
 static const char *TAG = "cap_scheduler";
+static const char *CAP_SCHEDULER_NVS_NAMESPACE = "cap_sched";
+
+static void cap_scheduler_log_nvs_failure(const char *operation, const char *path, esp_err_t err)
+{
+    ESP_LOGW(TAG,
+             "%s failed path=%s err=%s",
+             operation ? operation : "file operation",
+             path ? path : "(null)",
+             esp_err_to_name(err));
+}
 
 static void cap_scheduler_log_errno_failure(const char *operation, const char *path)
 {
@@ -25,19 +36,176 @@ static void cap_scheduler_log_errno_failure(const char *operation, const char *p
              strerror(saved_errno));
 }
 
-static void cap_scheduler_log_errno_failure2(const char *operation,
-                                             const char *src_path,
-                                             const char *dst_path)
+static uint64_t cap_scheduler_hash_path(const char *path)
 {
-    int saved_errno = errno;
+    uint64_t hash = 1469598103934665603ULL;
 
-    ESP_LOGW(TAG,
-             "%s failed src=%s dst=%s errno=%d (%s)",
-             operation ? operation : "file operation",
-             src_path ? src_path : "(null)",
-             dst_path ? dst_path : "(null)",
-             saved_errno,
-             strerror(saved_errno));
+    if (!path) {
+        return 0;
+    }
+
+    for (const unsigned char *cursor = (const unsigned char *)path; *cursor; cursor++) {
+        hash ^= (uint64_t)(*cursor);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static esp_err_t cap_scheduler_build_nvs_key(const char *path, char *key, size_t key_size)
+{
+    int written;
+
+    if (!path || !path[0] || !key || key_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    written = snprintf(key, key_size, "cs%013llx", (unsigned long long)(cap_scheduler_hash_path(path) & 0x1ffffffffffffULL));
+    if (written < 0 || (size_t)written >= key_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t cap_scheduler_open_nvs(nvs_open_mode_t mode, nvs_handle_t *out_handle)
+{
+    esp_err_t err;
+
+    if (!out_handle) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = nvs_open(CAP_SCHEDULER_NVS_NAMESPACE, mode, out_handle);
+    if (err != ESP_OK) {
+        cap_scheduler_log_nvs_failure("nvs_open", CAP_SCHEDULER_NVS_NAMESPACE, err);
+    }
+    return err;
+}
+
+static esp_err_t cap_scheduler_read_blob(const char *path, void **out_buf, size_t *out_len)
+{
+    nvs_handle_t handle = 0;
+    char key[NVS_KEY_NAME_MAX_SIZE] = {0};
+    void *buf = NULL;
+    size_t len = 0;
+    esp_err_t err;
+
+    if (!path || !out_buf || !out_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = cap_scheduler_build_nvs_key(path, key, sizeof(key));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = cap_scheduler_open_nvs(NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return err == ESP_ERR_NVS_NOT_FOUND ? ESP_ERR_NOT_FOUND : err;
+    }
+
+    err = nvs_get_blob(handle, key, NULL, &len);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(handle);
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (err != ESP_OK) {
+        cap_scheduler_log_nvs_failure("nvs_get_blob(size)", path, err);
+        nvs_close(handle);
+        return err;
+    }
+
+    buf = calloc(1, len ? len : 1);
+    if (!buf) {
+        nvs_close(handle);
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = nvs_get_blob(handle, key, buf, &len);
+    if (err != ESP_OK) {
+        cap_scheduler_log_nvs_failure("nvs_get_blob", path, err);
+        free(buf);
+        nvs_close(handle);
+        return err;
+    }
+
+    nvs_close(handle);
+    *out_buf = buf;
+    *out_len = len;
+    return ESP_OK;
+}
+
+static esp_err_t cap_scheduler_write_state_blob(const char *path, const void *content, size_t content_len)
+{
+    nvs_handle_t handle = 0;
+    char key[NVS_KEY_NAME_MAX_SIZE] = {0};
+    esp_err_t err;
+
+    if (!path || !content) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = cap_scheduler_build_nvs_key(path, key, sizeof(key));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = cap_scheduler_open_nvs(NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_set_blob(handle, key, content, content_len);
+    if (err != ESP_OK) {
+        cap_scheduler_log_nvs_failure("nvs_set_blob", path, err);
+        nvs_close(handle);
+        return err;
+    }
+
+    err = nvs_commit(handle);
+    if (err != ESP_OK) {
+        cap_scheduler_log_nvs_failure("nvs_commit", path, err);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+static esp_err_t cap_scheduler_erase_state_blob(const char *path)
+{
+    nvs_handle_t handle = 0;
+    char key[NVS_KEY_NAME_MAX_SIZE] = {0};
+    esp_err_t err;
+
+    if (!path) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = cap_scheduler_build_nvs_key(path, key, sizeof(key));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = cap_scheduler_open_nvs(NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_erase_key(handle, key);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(handle);
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        cap_scheduler_log_nvs_failure("nvs_erase_key", path, err);
+        nvs_close(handle);
+        return err;
+    }
+
+    err = nvs_commit(handle);
+    if (err != ESP_OK) {
+        cap_scheduler_log_nvs_failure("nvs_commit(erase)", path, err);
+    }
+    nvs_close(handle);
+    return err;
 }
 
 static esp_err_t cap_scheduler_read_file(const char *path, char **out_buf)
@@ -76,6 +244,7 @@ static esp_err_t cap_scheduler_read_file(const char *path, char **out_buf)
         fclose(file);
         return ESP_ERR_NO_MEM;
     }
+
     if (file_size > 0 && fread(buf, 1, (size_t)file_size, file) != (size_t)file_size) {
         cap_scheduler_log_errno_failure("fread", path);
         fclose(file);
@@ -84,6 +253,35 @@ static esp_err_t cap_scheduler_read_file(const char *path, char **out_buf)
     }
 
     fclose(file);
+    *out_buf = buf;
+    return ESP_OK;
+}
+
+static esp_err_t cap_scheduler_read_state_file(const char *path, char **out_buf)
+{
+    void *blob = NULL;
+    size_t blob_len = 0;
+    char *buf = NULL;
+    esp_err_t err;
+
+    if (!path || !out_buf) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = cap_scheduler_read_blob(path, &blob, &blob_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    buf = calloc(1, blob_len + 1);
+    if (!buf) {
+        free(blob);
+        return ESP_ERR_NO_MEM;
+    }
+    if (blob_len > 0) {
+        memcpy(buf, blob, blob_len);
+    }
+    free(blob);
     *out_buf = buf;
     return ESP_OK;
 }
@@ -169,10 +367,7 @@ static esp_err_t cap_scheduler_write_file(const char *path, const char *content)
     return ESP_OK;
 }
 
-esp_err_t cap_scheduler_build_aux_path(const char *path,
-                                       const char *suffix,
-                                       char *out_path,
-                                       size_t out_path_size)
+esp_err_t cap_scheduler_build_aux_path(const char *path, const char *suffix, char *out_path, size_t out_path_size)
 {
     int written;
 
@@ -188,46 +383,17 @@ esp_err_t cap_scheduler_build_aux_path(const char *path,
     return ESP_OK;
 }
 
+esp_err_t cap_scheduler_build_state_path(const char *schedules_path, char *out_path, size_t out_path_size)
+{
+    return cap_scheduler_build_aux_path(schedules_path, CAP_SCHEDULER_STATE_KEY_SUFFIX, out_path, out_path_size);
+}
+
 static esp_err_t cap_scheduler_write_file_and_sync(const char *path, const char *content)
 {
-    FILE *file = NULL;
-    size_t content_len;
-
     if (!path || !content) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (cap_scheduler_ensure_parent_dir(path) != ESP_OK) {
-        ESP_LOGW(TAG, "ensure parent dir failed for %s", path);
-        return ESP_FAIL;
-    }
-
-    file = fopen(path, "wb");
-    if (!file) {
-        cap_scheduler_log_errno_failure("fopen(write+sync)", path);
-        return ESP_FAIL;
-    }
-
-    content_len = strlen(content);
-    if (content_len > 0 && fwrite(content, 1, content_len, file) != content_len) {
-        cap_scheduler_log_errno_failure("fwrite(write+sync)", path);
-        fclose(file);
-        return ESP_FAIL;
-    }
-    if (fflush(file) != 0) {
-        cap_scheduler_log_errno_failure("fflush", path);
-        fclose(file);
-        return ESP_FAIL;
-    }
-#ifdef __unix__
-    if (fsync(fileno(file)) != 0) {
-        cap_scheduler_log_errno_failure("fsync", path);
-        fclose(file);
-        return ESP_FAIL;
-    }
-#endif
-
-    fclose(file);
-    return ESP_OK;
+    return cap_scheduler_write_state_blob(path, content, strlen(content));
 }
 
 static esp_err_t cap_scheduler_validate_state_json_text(const char *json)
@@ -253,134 +419,21 @@ static esp_err_t cap_scheduler_validate_state_file(const char *path)
     char *buf = NULL;
     esp_err_t err;
 
-    err = cap_scheduler_read_file(path, &buf);
+    err = cap_scheduler_read_state_file(path, &buf);
     if (err != ESP_OK) {
         return err;
     }
 
     err = cap_scheduler_validate_state_json_text(buf);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "State file validation failed path=%s err=%s",
-                 path,
-                 esp_err_to_name(err));
+        ESP_LOGW(TAG, "State file validation failed path=%s err=%s", path, esp_err_to_name(err));
     }
     free(buf);
     return err;
-}
-
-static void cap_scheduler_remove_file_if_exists(const char *path)
-{
-    if (!path) {
-        return;
-    }
-
-    if (unlink(path) != 0 && errno != ENOENT) {
-        return;
-    }
-}
-
-static esp_err_t cap_scheduler_copy_file(const char *src_path, const char *dst_path)
-{
-    char *buf = NULL;
-    esp_err_t err;
-
-    if (!src_path || !dst_path) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    err = cap_scheduler_read_file(src_path, &buf);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = cap_scheduler_write_file_and_sync(dst_path, buf);
-    free(buf);
-    return err;
-}
-
-static esp_err_t cap_scheduler_rotate_state_backup(const char *path, const char *backup_path)
-{
-    char backup_tmp_path[CAP_SCHEDULER_PATH_BUF_LEN] = {0};
-    esp_err_t err;
-
-    err = cap_scheduler_validate_state_file(path);
-    if (err == ESP_ERR_NOT_FOUND) {
-        return ESP_OK;
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Skip backup rotation because primary state is not valid path=%s err=%s",
-                 path,
-                 esp_err_to_name(err));
-        return ESP_OK;
-    }
-
-    err = cap_scheduler_build_aux_path(backup_path,
-                                       CAP_SCHEDULER_STATE_TMP_SUFFIX,
-                                       backup_tmp_path,
-                                       sizeof(backup_tmp_path));
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    cap_scheduler_remove_file_if_exists(backup_tmp_path);
-    err = cap_scheduler_copy_file(path, backup_tmp_path);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "copy primary to backup temp failed src=%s dst=%s err=%s",
-                 path,
-                 backup_tmp_path,
-                 esp_err_to_name(err));
-        return err;
-    }
-
-    cap_scheduler_remove_file_if_exists(backup_path);
-    if (rename(backup_tmp_path, backup_path) != 0) {
-        cap_scheduler_log_errno_failure2("rename(backup_tmp->backup)",
-                                         backup_tmp_path,
-                                         backup_path);
-        cap_scheduler_remove_file_if_exists(backup_tmp_path);
-        return ESP_FAIL;
-    }
-
-    cap_scheduler_remove_file_if_exists(path);
-    return ESP_OK;
-}
-
-static esp_err_t cap_scheduler_promote_state_file(const char *tmp_path, const char *path)
-{
-    esp_err_t err;
-
-    if (!tmp_path || !path) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (rename(tmp_path, path) == 0) {
-        return ESP_OK;
-    }
-    cap_scheduler_log_errno_failure2("rename(tmp->primary)", tmp_path, path);
-
-    cap_scheduler_remove_file_if_exists(path);
-    if (rename(tmp_path, path) == 0) {
-        return ESP_OK;
-    }
-    cap_scheduler_log_errno_failure2("rename(tmp->primary after remove)", tmp_path, path);
-
-    err = cap_scheduler_copy_file(tmp_path, path);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "copy temp state into primary failed src=%s dst=%s err=%s",
-                 tmp_path,
-                 path,
-                 esp_err_to_name(err));
-        return err;
-    }
-
-    cap_scheduler_remove_file_if_exists(tmp_path);
-    return ESP_OK;
 }
 
 static esp_err_t cap_scheduler_write_state_file(const char *path, const char *content)
 {
-    char tmp_path[CAP_SCHEDULER_PATH_BUF_LEN] = {0};
-    char backup_path[CAP_SCHEDULER_PATH_BUF_LEN] = {0};
     esp_err_t err;
 
     if (!path || !content) {
@@ -389,65 +442,22 @@ static esp_err_t cap_scheduler_write_state_file(const char *path, const char *co
 
     err = cap_scheduler_validate_state_json_text(content);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Rendered runtime state JSON is invalid path=%s err=%s",
-                 path,
-                 esp_err_to_name(err));
+        ESP_LOGW(TAG, "Rendered runtime state JSON is invalid path=%s err=%s", path, esp_err_to_name(err));
         return err;
     }
 
-    err = cap_scheduler_build_aux_path(path,
-                                       CAP_SCHEDULER_STATE_TMP_SUFFIX,
-                                       tmp_path,
-                                       sizeof(tmp_path));
+    err = cap_scheduler_write_file_and_sync(path, content);
     if (err != ESP_OK) {
-        return err;
-    }
-    err = cap_scheduler_build_aux_path(path,
-                                       CAP_SCHEDULER_STATE_BACKUP_SUFFIX,
-                                       backup_path,
-                                       sizeof(backup_path));
-    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Write runtime state failed path=%s err=%s", path, esp_err_to_name(err));
         return err;
     }
 
-    cap_scheduler_remove_file_if_exists(tmp_path);
-    err = cap_scheduler_write_file_and_sync(tmp_path, content);
+    err = cap_scheduler_validate_state_file(path);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Write runtime state temp file failed path=%s err=%s",
-                 tmp_path,
-                 esp_err_to_name(err));
+        ESP_LOGW(TAG, "Validate runtime state failed path=%s err=%s", path, esp_err_to_name(err));
+        (void)cap_scheduler_erase_state_blob(path);
         return err;
     }
-
-    err = cap_scheduler_validate_state_file(tmp_path);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Validate runtime state temp file failed path=%s err=%s",
-                 tmp_path,
-                 esp_err_to_name(err));
-        cap_scheduler_remove_file_if_exists(tmp_path);
-        return err;
-    }
-
-    err = cap_scheduler_rotate_state_backup(path, backup_path);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Rotate runtime state backup failed primary=%s backup=%s err=%s",
-                 path,
-                 backup_path,
-                 esp_err_to_name(err));
-        cap_scheduler_remove_file_if_exists(tmp_path);
-        return err;
-    }
-
-    err = cap_scheduler_promote_state_file(tmp_path, path);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Promote runtime state temp file failed temp=%s primary=%s err=%s",
-                 tmp_path,
-                 path,
-                 esp_err_to_name(err));
-        cap_scheduler_remove_file_if_exists(tmp_path);
-        return err;
-    }
-
     return ESP_OK;
 }
 
@@ -640,9 +650,7 @@ static bool cap_scheduler_status_from_string(const char *value, cap_scheduler_st
     return false;
 }
 
-static void cap_scheduler_parse_item_json(const cJSON *node,
-                                          cap_scheduler_item_t *item,
-                                          const char *default_timezone)
+static void cap_scheduler_parse_item_json(const cJSON *node, cap_scheduler_item_t *item, const char *default_timezone)
 {
     const cJSON *value;
 
@@ -728,9 +736,7 @@ static void cap_scheduler_parse_item_json(const cJSON *node,
     cap_scheduler_apply_defaults(item, default_timezone);
 }
 
-esp_err_t cap_scheduler_entry_to_json(const cap_scheduler_entry_t *entry,
-                                      bool include_item,
-                                      cJSON **out_json)
+esp_err_t cap_scheduler_entry_to_json(const cap_scheduler_entry_t *entry, bool include_item, cJSON **out_json)
 {
     cJSON *root = NULL;
 
@@ -775,10 +781,7 @@ esp_err_t cap_scheduler_entry_to_json(const cap_scheduler_entry_t *entry,
     return ESP_OK;
 }
 
-esp_err_t cap_scheduler_load_items(const char *path,
-                                   cap_scheduler_item_t *items,
-                                   size_t max_items,
-                                   size_t *out_count,
+esp_err_t cap_scheduler_load_items(const char *path, cap_scheduler_item_t *items, size_t max_items, size_t *out_count,
                                    const char *default_timezone)
 {
     char *buf = NULL;
@@ -829,9 +832,7 @@ esp_err_t cap_scheduler_load_items(const char *path,
     return ESP_OK;
 }
 
-esp_err_t cap_scheduler_parse_item_json_string(const char *json,
-                                               cap_scheduler_item_t *item,
-                                               const char *default_timezone)
+esp_err_t cap_scheduler_parse_item_json_string(const char *json, cap_scheduler_item_t *item, const char *default_timezone)
 {
     char *normalized_json = NULL;
     char *fallback_json = NULL;
@@ -891,9 +892,7 @@ esp_err_t cap_scheduler_parse_item_json_string(const char *json,
     return ESP_OK;
 }
 
-esp_err_t cap_scheduler_save_items(const char *path,
-                                   const cap_scheduler_entry_t *entries,
-                                   size_t entry_count)
+esp_err_t cap_scheduler_save_items(const char *path, const cap_scheduler_entry_t *entries, size_t entry_count)
 {
     cJSON *root = cJSON_CreateArray();
     char *rendered = NULL;
@@ -934,9 +933,7 @@ esp_err_t cap_scheduler_save_items(const char *path,
     return err;
 }
 
-esp_err_t cap_scheduler_load_state(const char *path,
-                                   cap_scheduler_entry_t *entries,
-                                   size_t entry_count)
+esp_err_t cap_scheduler_load_state(const char *path, cap_scheduler_entry_t *entries, size_t entry_count)
 {
     char *buf = NULL;
     cJSON *root = NULL;
@@ -946,7 +943,7 @@ esp_err_t cap_scheduler_load_state(const char *path,
         return ESP_ERR_INVALID_ARG;
     }
 
-    err = cap_scheduler_read_file(path, &buf);
+    err = cap_scheduler_read_state_file(path, &buf);
     if (err == ESP_ERR_NOT_FOUND) {
         return ESP_ERR_NOT_FOUND;
     }
@@ -1009,9 +1006,7 @@ esp_err_t cap_scheduler_load_state(const char *path,
     return ESP_OK;
 }
 
-esp_err_t cap_scheduler_save_state(const char *path,
-                                   const cap_scheduler_entry_t *entries,
-                                   size_t entry_count)
+esp_err_t cap_scheduler_save_state(const char *path, const cap_scheduler_entry_t *entries, size_t entry_count)
 {
     cJSON *root = cJSON_CreateArray();
     char *rendered = NULL;
@@ -1035,16 +1030,14 @@ esp_err_t cap_scheduler_save_state(const char *path,
         cJSON_AddItemToArray(root, obj);
     }
 
-    rendered = cJSON_Print(root);
+    rendered = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!rendered) {
         return ESP_ERR_NO_MEM;
     }
     err = cap_scheduler_write_state_file(path, rendered);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Save runtime state failed path=%s err=%s",
-                 path,
-                 esp_err_to_name(err));
+        ESP_LOGW(TAG, "Save runtime state failed path=%s err=%s", path, esp_err_to_name(err));
     }
     free(rendered);
     return err;

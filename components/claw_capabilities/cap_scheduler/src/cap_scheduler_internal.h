@@ -15,8 +15,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#define CAP_SCHEDULER_STATE_TMP_SUFFIX       ".tmp"
-#define CAP_SCHEDULER_STATE_BACKUP_SUFFIX    ".bak"
+#define CAP_SCHEDULER_STATE_KEY_SUFFIX       ".state"
 #define CAP_SCHEDULER_PATH_BUF_LEN           224
 #define CAP_SCHEDULER_DEFAULT_TIMEZONE       "UTC0"
 #define CAP_SCHEDULER_DEFAULT_TICK_MS        1000
@@ -55,6 +54,7 @@ typedef struct {
 extern cap_scheduler_runtime_t s_cap_scheduler;
 
 int64_t cap_scheduler_now_ms(void);
+esp_err_t cap_scheduler_build_state_path(const char *schedules_path, char *out_path, size_t out_path_size);
 void cap_scheduler_apply_defaults(cap_scheduler_item_t *item, const char *default_timezone);
 bool cap_scheduler_is_supported_timezone(const char *timezone);
 esp_err_t cap_scheduler_validate_item(const cap_scheduler_item_t *item);
