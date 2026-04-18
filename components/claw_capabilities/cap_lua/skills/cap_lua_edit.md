@@ -2,10 +2,15 @@
 
 Use this skill when the user wants to create or modify a Lua script.
 
-## Module Rule
-- Before writing Lua code, first activate all available `lua_module_xxx` skills.
-- Read those skills to learn which Lua modules are available and how to call them.
-- Treat the activated `lua_module_xxx` skills as the source of truth for usable Lua modules in this firmware.
+## Rules
+- Before writing or revising Lua code, first get the board hardware information. When information is lacking, **don't guess**, ask the user.
+- Activate the relevant `lua_module_xxx` skills first. They are the source of truth for available Lua modules and function names.
+- Only use modules documented by those skills. Do not invent APIs or assume extra Lua packages beyond the runtime's built-ins.
+- Write scripts through `lua_write_script`, not `cap_cli`.
+- `path` must be a relative `.lua` path under the configured Lua base directory, for example `demo.lua` or `temp/demo.lua`.
+- New or unconfirmed scripts must be written under `temp/`.
+- When the user confirms the script should be kept, save the final version under `user/`.
+- `overwrite` defaults to `true`; set it to `false` only when the user explicitly wants create-only behavior.
 
 ## Import Rule
 - Only use Lua modules that are described by the activated `lua_module_xxx` skills.

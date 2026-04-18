@@ -18,6 +18,9 @@ dependencies:
   cap_cli:
     path: ../../../components/claw_capabilities/cap_cli
 
+  cap_boards:
+    path: ../../../components/claw_capabilities/cap_boards
+
   cap_files:
     path: ../../../components/claw_capabilities/cap_files
 
@@ -56,6 +59,9 @@ dependencies:
 
   cap_skill_mgr:
     path: ../../../components/claw_capabilities/cap_skill_mgr
+
+  cap_system:
+    path: ../../../components/claw_capabilities/cap_system
 
   cap_scheduler:
     path: ../../../components/claw_capabilities/cap_scheduler

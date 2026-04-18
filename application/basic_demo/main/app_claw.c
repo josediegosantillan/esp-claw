@@ -25,6 +25,7 @@
 #include "cap_session_mgr.h"
 #include "cap_scheduler.h"
 #include "cap_skill_mgr.h"
+#include "cap_system.h"
 #include "cap_time.h"
 #include "cap_web_search.h"
 #include "claw_event_publisher.h"
@@ -42,12 +43,14 @@ static const char *TAG = "app_esp_claw";
 static const char *const BASIC_DEMO_LLM_VISIBLE_GROUPS[] = {
     "cap_files",
     "cap_skill",
+    "cap_system",
     "claw_memory",
 };
 #else
 static const char *const BASIC_DEMO_LLM_VISIBLE_GROUPS[] = {
     "cap_files",
     "cap_skill",
+    "cap_system",
 };
 #endif
 
@@ -178,12 +181,28 @@ static esp_err_t init_skills(const basic_demo_paths_t *paths)
 
 static esp_err_t init_capabilities(const basic_demo_settings_t *settings, const basic_demo_paths_t *paths)
 {
-    claw_cap_config_t cap_config = {
-        .max_capabilities = 64,
-        .max_groups = 24,
-    };
+    claw_cap_list_t cap_list;
+    claw_cap_group_list_t group_list;
+    esp_err_t err;
 
-    ESP_RETURN_ON_ERROR(claw_cap_init(&cap_config), TAG, "Failed to init claw_cap");
+#define REGISTER_CAP_GROUP(fn, label) do { \
+        err = (fn)(); \
+        cap_list = claw_cap_list(); \
+        group_list = claw_cap_list_groups(); \
+        if (err != ESP_OK) { \
+            ESP_LOGE(TAG, "%s failed: %s (groups=%u, caps=%u)", \
+                     (label), esp_err_to_name(err), \
+                     (unsigned)group_list.count, \
+                     (unsigned)cap_list.count); \
+            return err; \
+        } \
+        ESP_LOGI(TAG, "%s ok (groups=%u, caps=%u)", \
+                 (label), \
+                 (unsigned)group_list.count, \
+                 (unsigned)cap_list.count); \
+    } while (0)
+
+    ESP_RETURN_ON_ERROR(claw_cap_init(), TAG, "Failed to init claw_cap");
 
     ESP_RETURN_ON_ERROR(cap_files_set_base_dir(basic_demo_fatfs_base_path), TAG, "Failed to set files cap base dir");
     ESP_RETURN_ON_ERROR(cap_lua_set_base_dir(paths->lua_root_dir), TAG, "Failed to set Lua base dir");
@@ -242,29 +261,32 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings, const 
         ESP_RETURN_ON_ERROR(cap_web_search_set_tavily_key(settings->search_tavily_key), TAG, "Failed to set Tavily search key");
     }
 
-    ESP_RETURN_ON_ERROR(cap_im_qq_register_group(), TAG, "Failed to register QQ cap");
-    ESP_RETURN_ON_ERROR(cap_im_feishu_register_group(), TAG, "Failed to register Feishu cap");
-    ESP_RETURN_ON_ERROR(cap_im_tg_register_group(), TAG, "Failed to register Telegram cap");
-    ESP_RETURN_ON_ERROR(cap_im_wechat_register_group(), TAG, "Failed to register WeChat cap");
-    ESP_RETURN_ON_ERROR(cap_files_register_group(), TAG, "Failed to register files cap");
+    REGISTER_CAP_GROUP(cap_im_qq_register_group, "Register QQ cap");
+    REGISTER_CAP_GROUP(cap_im_feishu_register_group, "Register Feishu cap");
+    REGISTER_CAP_GROUP(cap_im_tg_register_group, "Register Telegram cap");
+    REGISTER_CAP_GROUP(cap_im_wechat_register_group, "Register WeChat cap");
+    REGISTER_CAP_GROUP(cap_files_register_group, "Register files cap");
     ESP_RETURN_ON_ERROR(basic_demo_lua_modules_register(), TAG, "Failed to register app Lua modules");
-    ESP_RETURN_ON_ERROR(cap_scheduler_register_group(), TAG, "Failed to register scheduler cap");
-    ESP_RETURN_ON_ERROR(cap_lua_register_group(), TAG, "Failed to register Lua cap");
-    ESP_RETURN_ON_ERROR(cap_mcp_client_register_group(), TAG, "Failed to register MCP client cap");
-    ESP_RETURN_ON_ERROR(cap_mcp_server_register_group(), TAG, "Failed to register MCP server cap");
-    ESP_RETURN_ON_ERROR(cap_skill_mgr_register_group(), TAG, "Failed to register skill cap");
+    REGISTER_CAP_GROUP(cap_scheduler_register_group, "Register scheduler cap");
+    REGISTER_CAP_GROUP(cap_lua_register_group, "Register Lua cap");
+    REGISTER_CAP_GROUP(cap_mcp_client_register_group, "Register MCP client cap");
+    REGISTER_CAP_GROUP(cap_mcp_server_register_group, "Register MCP server cap");
+    REGISTER_CAP_GROUP(cap_skill_mgr_register_group, "Register skill cap");
+    REGISTER_CAP_GROUP(cap_system_register_group, "Register system cap");
 #if CONFIG_BASIC_DEMO_MEMORY_MODE_FULL
-    ESP_RETURN_ON_ERROR(claw_memory_register_group(), TAG, "Failed to register claw_memory group");
+    REGISTER_CAP_GROUP(claw_memory_register_group, "Register claw_memory group");
 #endif
-    ESP_RETURN_ON_ERROR(cap_time_register_group(), TAG, "Failed to register time cap");
-    ESP_RETURN_ON_ERROR(cap_llm_inspect_register_group(), TAG, "Failed to register LLM inspect cap");
-    ESP_RETURN_ON_ERROR(cap_web_search_register_group(), TAG, "Failed to register web search cap");
-    ESP_RETURN_ON_ERROR(cap_router_mgr_register_group(), TAG, "Failed to register router manager cap");
-    ESP_RETURN_ON_ERROR(cap_session_mgr_register_group(), TAG, "Failed to register session manager cap");
+    REGISTER_CAP_GROUP(cap_time_register_group, "Register time cap");
+    REGISTER_CAP_GROUP(cap_llm_inspect_register_group, "Register LLM inspect cap");
+    REGISTER_CAP_GROUP(cap_web_search_register_group, "Register web search cap");
+    REGISTER_CAP_GROUP(cap_router_mgr_register_group, "Register router manager cap");
+    REGISTER_CAP_GROUP(cap_session_mgr_register_group, "Register session manager cap");
     ESP_RETURN_ON_ERROR(claw_cap_set_llm_visible_groups(
                             BASIC_DEMO_LLM_VISIBLE_GROUPS, sizeof(BASIC_DEMO_LLM_VISIBLE_GROUPS) / sizeof(BASIC_DEMO_LLM_VISIBLE_GROUPS[0])),
                         TAG, "Failed to set LLM-visible capability groups");
     ESP_RETURN_ON_ERROR(claw_cap_start_all(), TAG, "Failed to start capabilities");
+
+#undef REGISTER_CAP_GROUP
 
     return ESP_OK;
 }
@@ -322,7 +344,6 @@ esp_err_t app_claw_start(const basic_demo_settings_t *settings)
     ESP_RETURN_ON_ERROR(claw_event_router_init(&router_config), TAG, "Failed to init event router");
     ESP_RETURN_ON_ERROR(cap_scheduler_init(&(cap_scheduler_config_t){
                             .schedules_path = paths.scheduler_rules_path,
-                            .default_timezone = settings->time_timezone,
                             .tick_ms = 1000,
                             .max_items = 32,
                             .task_stack_size = 6144,

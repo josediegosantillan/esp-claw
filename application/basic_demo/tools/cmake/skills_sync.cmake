@@ -63,5 +63,10 @@ function(basic_demo_enable_component_skills_sync)
         VERBATIM
     )
 
+    get_property(skill_generator_targets GLOBAL PROPERTY BASIC_DEMO_SKILL_GENERATOR_TARGETS)
+    if(skill_generator_targets)
+        add_dependencies(basic_demo_sync_skills ${skill_generator_targets})
+    endif()
+
     add_dependencies(${arg_TARGET} basic_demo_sync_skills)
 endfunction()
