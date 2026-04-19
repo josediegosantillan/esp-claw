@@ -1,4 +1,0 @@
-board: esp_SensairHalo
-chip: esp32c5
-description: "ESP-SensairHalo Development Board"
-manufacturer: "ESPRESSIF"

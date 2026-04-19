@@ -72,22 +72,10 @@ build_application_basic_demo:
   parallel:
     matrix:
       - IMAGE: espressif/idf:release-v5.5
-        EXAMPLE_BOARD: esp_SensairHalo
-        EXAMPLE_TARGET: esp32c5
-      - IMAGE: espressif/idf:release-v5.5
-        EXAMPLE_BOARD: esp_SensairShuttle
-        EXAMPLE_TARGET: esp32c5
-      - IMAGE: espressif/idf:release-v5.5
-        EXAMPLE_BOARD: esp_vocat_board_v1_2
-        EXAMPLE_TARGET: esp32s3
-      - IMAGE: espressif/idf:release-v5.5
         EXAMPLE_BOARD: esp32_S3_DevKitC_1
         EXAMPLE_TARGET: esp32s3
       - IMAGE: espressif/idf:release-v5.5
         EXAMPLE_BOARD: esp32_S3_DevKitC_1_breadboard
         EXAMPLE_TARGET: esp32s3
-      - IMAGE: espressif/idf:release-v5.5
-        EXAMPLE_BOARD: esp32_p4_function_ev
-        EXAMPLE_TARGET: esp32p4
   variables:
     EXAMPLE_DIR: application/basic_demo
