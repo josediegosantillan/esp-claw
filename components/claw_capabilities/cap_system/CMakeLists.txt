@@ -8,4 +8,6 @@ idf_component_register(
         json
         esp_netif
         esp_wifi
+    PRIV_REQUIRES
+        esp_timer
 )
