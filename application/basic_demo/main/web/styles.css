@@ -525,6 +525,10 @@ select option {
   max-width: 200px;
   width: 100%;
   margin: 0 auto;
+  box-sizing: border-box;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 10px;
   image-rendering: pixelated;
 }
 
