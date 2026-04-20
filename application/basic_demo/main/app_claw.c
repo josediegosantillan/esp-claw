@@ -191,8 +191,8 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings, const 
     claw_cap_group_list_t group_list;
     esp_err_t err;
 
-#define REGISTER_CAP_GROUP(fn, label) do { \
-        err = (fn)(); \
+#define REGISTER_CAP_GROUP(call, label) do { \
+        err = (call); \
         cap_list = claw_cap_list(); \
         group_list = claw_cap_list_groups(); \
         if (err != ESP_OK) { \
@@ -211,7 +211,6 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings, const 
     ESP_RETURN_ON_ERROR(claw_cap_init(), TAG, "Failed to init claw_cap");
 
     ESP_RETURN_ON_ERROR(cap_files_set_base_dir(basic_demo_fatfs_base_path), TAG, "Failed to set files cap base dir");
-    ESP_RETURN_ON_ERROR(cap_lua_set_base_dir(paths->lua_root_dir), TAG, "Failed to set Lua base dir");
     ESP_RETURN_ON_ERROR(cap_im_qq_set_attachment_config(&(cap_im_qq_attachment_config_t){
                             .storage_root_dir = paths->im_attachment_root,
                             .max_inbound_file_bytes = BASIC_DEMO_IM_ATTACHMENT_MAX_BYTES,
@@ -267,26 +266,26 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings, const 
         ESP_RETURN_ON_ERROR(cap_web_search_set_tavily_key(settings->search_tavily_key), TAG, "Failed to set Tavily search key");
     }
 
-    REGISTER_CAP_GROUP(cap_im_qq_register_group, "Register QQ cap");
-    REGISTER_CAP_GROUP(cap_im_feishu_register_group, "Register Feishu cap");
-    REGISTER_CAP_GROUP(cap_im_tg_register_group, "Register Telegram cap");
-    REGISTER_CAP_GROUP(cap_im_wechat_register_group, "Register WeChat cap");
-    REGISTER_CAP_GROUP(cap_files_register_group, "Register files cap");
+    REGISTER_CAP_GROUP(cap_im_qq_register_group(), "Register QQ cap");
+    REGISTER_CAP_GROUP(cap_im_feishu_register_group(), "Register Feishu cap");
+    REGISTER_CAP_GROUP(cap_im_tg_register_group(), "Register Telegram cap");
+    REGISTER_CAP_GROUP(cap_im_wechat_register_group(), "Register WeChat cap");
+    REGISTER_CAP_GROUP(cap_files_register_group(), "Register files cap");
     ESP_RETURN_ON_ERROR(basic_demo_lua_modules_register(), TAG, "Failed to register app Lua modules");
-    REGISTER_CAP_GROUP(cap_scheduler_register_group, "Register scheduler cap");
-    REGISTER_CAP_GROUP(cap_lua_register_group, "Register Lua cap");
-    REGISTER_CAP_GROUP(cap_mcp_client_register_group, "Register MCP client cap");
-    REGISTER_CAP_GROUP(cap_mcp_server_register_group, "Register MCP server cap");
-    REGISTER_CAP_GROUP(cap_skill_mgr_register_group, "Register skill cap");
-    REGISTER_CAP_GROUP(cap_system_register_group, "Register system cap");
+    REGISTER_CAP_GROUP(cap_scheduler_register_group(), "Register scheduler cap");
+    REGISTER_CAP_GROUP(cap_lua_register_group(paths->lua_root_dir), "Register Lua cap");
+    REGISTER_CAP_GROUP(cap_mcp_client_register_group(), "Register MCP client cap");
+    REGISTER_CAP_GROUP(cap_mcp_server_register_group(), "Register MCP server cap");
+    REGISTER_CAP_GROUP(cap_skill_mgr_register_group(), "Register skill cap");
+    REGISTER_CAP_GROUP(cap_system_register_group(), "Register system cap");
 #if CONFIG_BASIC_DEMO_MEMORY_MODE_FULL
-    REGISTER_CAP_GROUP(claw_memory_register_group, "Register claw_memory group");
+    REGISTER_CAP_GROUP(claw_memory_register_group(), "Register claw_memory group");
 #endif
-    REGISTER_CAP_GROUP(cap_time_register_group, "Register time cap");
-    REGISTER_CAP_GROUP(cap_llm_inspect_register_group, "Register LLM inspect cap");
-    REGISTER_CAP_GROUP(cap_web_search_register_group, "Register web search cap");
-    REGISTER_CAP_GROUP(cap_router_mgr_register_group, "Register router manager cap");
-    REGISTER_CAP_GROUP(cap_session_mgr_register_group, "Register session manager cap");
+    REGISTER_CAP_GROUP(cap_time_register_group(), "Register time cap");
+    REGISTER_CAP_GROUP(cap_llm_inspect_register_group(), "Register LLM inspect cap");
+    REGISTER_CAP_GROUP(cap_web_search_register_group(), "Register web search cap");
+    REGISTER_CAP_GROUP(cap_router_mgr_register_group(), "Register router manager cap");
+    REGISTER_CAP_GROUP(cap_session_mgr_register_group(), "Register session manager cap");
     ESP_RETURN_ON_ERROR(claw_cap_set_llm_visible_groups(
                             BASIC_DEMO_LLM_VISIBLE_GROUPS, sizeof(BASIC_DEMO_LLM_VISIBLE_GROUPS) / sizeof(BASIC_DEMO_LLM_VISIBLE_GROUPS[0])),
                         TAG, "Failed to set LLM-visible capability groups");
@@ -408,13 +407,12 @@ esp_err_t app_claw_start(const basic_demo_settings_t *settings)
         ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_memory_long_term_lightweight_provider), TAG,"Failed to add lightweight long-term memory provider");
 #endif
 
-ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_memory_session_history_provider), TAG, "Failed to add session history provider");
-ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_skill_skills_list_provider), TAG, "Failed to add skills list provider");
-ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_skill_active_skill_docs_provider), TAG, "Failed to add active skill docs provider");
-ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_cap_tools_provider), TAG, "Failed to add cap tools provider");
-ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&cap_lua_async_jobs_provider), TAG, "Failed to add Lua async jobs provider");
-        ESP_RETURN_ON_ERROR(claw_core_add_completion_observer(cap_lua_honesty_observe_completion, NULL),
-                            TAG, "Failed to install Lua honesty observer");
+        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_memory_session_history_provider), TAG, "Failed to add session history provider");
+        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_skill_skills_list_provider), TAG, "Failed to add skills list provider");
+        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_skill_active_skill_docs_provider), TAG, "Failed to add active skill docs provider");
+        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_cap_tools_provider), TAG, "Failed to add cap tools provider");
+        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&cap_lua_async_jobs_provider), TAG, "Failed to add Lua async jobs provider");
+        ESP_RETURN_ON_ERROR(claw_core_add_completion_observer(cap_lua_honesty_observe_completion, NULL), TAG, "Failed to install Lua honesty observer");
 
         ESP_RETURN_ON_ERROR(claw_core_start(), TAG, "Failed to start claw_core");
     }

@@ -14,7 +14,6 @@
 #include "esp_console.h"
 
 static struct {
-    struct arg_lit *show_base_dir;
     struct arg_lit *list;
     struct arg_lit *write;
     struct arg_lit *run;
@@ -24,6 +23,7 @@ static struct {
     struct arg_str *path;
     struct arg_str *content;
     struct arg_str *prefix;
+    struct arg_str *keyword;
     struct arg_str *args_json;
     struct arg_str *status;
     struct arg_int *timeout_ms;
@@ -117,7 +117,7 @@ static int lua_func(int argc, char **argv)
         return 1;
     }
 
-    operation_count = lua_args.show_base_dir->count + lua_args.list->count + lua_args.write->count +
+    operation_count = lua_args.list->count + lua_args.write->count +
                       lua_args.run->count + lua_args.run_async->count + lua_args.jobs->count +
                       lua_args.job->count;
     if (operation_count != 1) {
@@ -140,16 +140,8 @@ static int lua_func(int argc, char **argv)
         timeout_ms = (uint32_t)lua_args.timeout_ms->ival[0];
     }
 
-    if (lua_args.show_base_dir->count) {
-        printf("%s\n", cap_lua_get_base_dir());
-        free(result);
-        return 0;
-    }
-
     if (lua_args.list->count) {
-        err = cap_lua_list_scripts(lua_args.prefix->count ? lua_args.prefix->sval[0] : NULL,
-                                   result,
-                                   4096);
+        err = cap_lua_list_scripts(lua_args.prefix->count ? lua_args.prefix->sval[0] : NULL, lua_args.keyword->count ? lua_args.keyword->sval[0] : NULL, result, 4096);
     } else if (lua_args.write->count) {
         if (!lua_args.path->count || !lua_args.content->count) {
             printf("'--write' requires '--path' and '--content'\n");
@@ -217,16 +209,16 @@ static int lua_func(int argc, char **argv)
 
 void register_cap_lua(void)
 {
-    lua_args.show_base_dir = arg_lit0(NULL, "base-dir", "Print the configured Lua base directory");
     lua_args.list = arg_lit0("l", "list", "List managed Lua scripts");
     lua_args.write = arg_lit0("w", "write", "Write a managed Lua script");
     lua_args.run = arg_lit0("r", "run", "Run a managed Lua script synchronously");
     lua_args.run_async = arg_lit0(NULL, "run-async", "Run a managed Lua script asynchronously");
     lua_args.jobs = arg_lit0(NULL, "jobs", "List async Lua jobs");
     lua_args.job = arg_str0(NULL, "job", "<job_id>", "Show one async Lua job");
-    lua_args.path = arg_str0("p", "path", "<path>", "Lua file path relative to base dir or absolute");
+    lua_args.path = arg_str0("p", "path", "<path>", "Relative Lua file path, for example temp/foo.lua");
     lua_args.content = arg_str0("c", "content", "<content>", "Lua script content for write");
-    lua_args.prefix = arg_str0(NULL, "prefix", "<prefix>", "Optional absolute prefix filter for list");
+    lua_args.prefix = arg_str0(NULL, "prefix", "<prefix>", "Optional relative prefix filter for list");
+    lua_args.keyword = arg_str0(NULL, "keyword", "<keyword>", "Optional case-insensitive keyword filter for list");
     lua_args.args_json = arg_str0(NULL, "args-json", "<json>", "JSON object/array passed to the script");
     lua_args.status = arg_str0(NULL, "status", "<status>", "Job status filter: all|queued|running|done|failed|timeout");
     lua_args.timeout_ms = arg_int0("t", "timeout-ms", "<ms>", "Execution timeout in milliseconds");
@@ -237,7 +229,6 @@ void register_cap_lua(void)
         .command = "lua",
         .help = "Lua script operations.\n"
         "Examples:\n"
-        " lua --base-dir\n"
         " lua --list\n"
         " lua --write --path blink.lua --content \"print('hi')\"\n"
         " lua --run --path blink.lua --args-json \"{\\\"pin\\\":2}\" --timeout-ms 3000\n"

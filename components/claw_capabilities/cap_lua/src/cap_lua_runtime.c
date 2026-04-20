@@ -243,10 +243,7 @@ esp_err_t cap_lua_runtime_execute_file(const char *path,
     output[0] = '\0';
 
     if (!cap_lua_path_is_valid(path)) {
-        snprintf(output,
-                 output_size,
-                 "Error: Lua path must be under %s and end with .lua",
-                 cap_lua_get_base_dir());
+        snprintf(output, output_size, "Error: Lua path must be a valid .lua script path");
         return ESP_ERR_INVALID_ARG;
     }
 

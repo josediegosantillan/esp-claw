@@ -14,7 +14,7 @@ Use this skill when the user wants to create or modify a Lua script.
 
 - `lua_list_scripts` returns paths **relative to the Lua script root** (e.g. `button_demo.lua`, `temp/wechat_button_notify_skeleton.lua`).
 - The `read_file` tool is rooted at the **FATFS mount** (e.g. `/fatfs`), while the Lua root is **`/fatfs/scripts`**. So you **must not** pass the bare `lua_list_scripts` string to `read_file` — that resolves to `/fatfs/...` and **fails**.
-- **Correct:** prefix with `scripts/`: `read_file` path = `scripts/` + *exactly* the string from `lua_list_scripts` (e.g. `scripts/button_demo.lua`, `scripts/temp/wechat_button_notify_skeleton.lua`). **Or** use the absolute path `/fatfs/scripts/<same relative path>`.
+- **Correct:** prefix with `scripts/`: `read_file` path = `scripts/` + *exactly* the string from `lua_list_scripts` (e.g. `scripts/button_demo.lua`, `scripts/temp/wechat_button_notify_skeleton.lua`).
 
 ## Sprint 1 — Lua runtime (C) is frozen
 
@@ -35,7 +35,8 @@ The following is **already in firmware** (see improvement report **P2-13** and L
 - Activate the relevant `lua_module_*` skills in one go when possible — they define which modules exist and the real API names.
 - Only `require` modules documented by an activated skill. Do not invent APIs or assume extra packages beyond the Lua runtime built-ins.
 - Write scripts through **`lua_write_script`**, not `cap_cli`.
-- **`path`** must be a relative `.lua` path under the configured Lua base directory, for example `temp/foo.lua` or `user/foo.lua`.
+- **`path`** must be a relative `.lua` path, for example `temp/foo.lua` or `user/foo.lua`.
+- `lua_list_scripts` also supports an optional `keyword` filter that does a case-insensitive substring match on the relative path.
 - **Iterate under `temp/`** until the user confirms behavior; then move or rewrite to **`user/`** for kept scripts.
 - `overwrite` defaults to `true`; set `false` only for create-only behavior when the user asks.
 

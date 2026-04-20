@@ -24,13 +24,11 @@ typedef struct {
 
 typedef void (*cap_lua_runtime_cleanup_fn_t)(void);
 
-const char *cap_lua_get_base_dir(void);
-esp_err_t cap_lua_register_group(void);
-esp_err_t cap_lua_set_base_dir(const char *base_dir);
+esp_err_t cap_lua_register_group(const char *base_dir);
 esp_err_t cap_lua_register_module(const char *name, lua_CFunction open_fn);
 esp_err_t cap_lua_register_modules(const cap_lua_module_t *modules, size_t count);
 esp_err_t cap_lua_register_runtime_cleanup(cap_lua_runtime_cleanup_fn_t cleanup_fn);
-esp_err_t cap_lua_list_scripts(const char *prefix, char *output, size_t output_size);
+esp_err_t cap_lua_list_scripts(const char *prefix, const char *keyword, char *output, size_t output_size);
 esp_err_t cap_lua_write_script(const char *path,
                                const char *content,
                                bool overwrite,

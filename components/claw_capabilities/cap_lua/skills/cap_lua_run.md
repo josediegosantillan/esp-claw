@@ -15,12 +15,12 @@ Use this skill when the user wants to see existing Lua scripts, run one, inspect
 
 ## Rules
 - Call the direct capability entrypoints, not `cap_cli`.
-- Use `lua_list_scripts` to inspect files. `prefix` is optional and must also be a relative path under the Lua base directory.
+- Use `lua_list_scripts` to inspect files. `prefix` is optional and must also be a relative path. `keyword` is optional and does a case-insensitive substring match on the relative path.
 - Use `lua_run_script` for short tasks that should return output immediately.
 - Use `lua_run_script_async` for loops, animations, watchers, or other long-running behavior.
 - Use `lua_list_async_jobs` and `lua_get_async_job` to inspect async execution state.
 - Use `lua_stop_async_job` (by `job_id` or `name`) or `lua_stop_all_async_jobs` (optionally filtered by `exclusive`) to cancel running jobs.
-- `path` must be a relative `.lua` path under the configured Lua base directory.
+- `path` must be a relative `.lua` path.
 - Newly authored scripts that are still being validated must run from `temp/*.lua`.
 - `args` may be an object or array. The runtime exposes it to Lua as the global `args`.
 - When the tool is invoked from an IM chat session, the firmware may merge `channel`, `chat_id`, and `session_id` into `args` if those keys are absent (so Lua can send messages back to the same chat).
