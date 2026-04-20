@@ -31,6 +31,8 @@
       - "**/build*/partition_table/*.bin"
       - "**/build*/mmap_build/**/*.bin"
       - "**/build*/**/*.bin"
+      - "merged_binary/*.bin"
+      - "merged_binary/*.json"
       - size_info.txt
     expire_in: 1 week
   variables:
@@ -52,18 +54,12 @@
               -vv \
               --board ${EXAMPLE_BOARD} \
               ${EXAMPLE_APPEND_ARGS}
-
-# ESP-IDF v5.1 has reached EOL in Dec 2025.
-#
-# For Espressif's IDF support policy,
-# please refer to
-# - https://github.com/espressif/esp-idf/blob/master/SUPPORT_POLICY.md.
-# - https://github.com/espressif/esp-idf/blob/master/README.md#esp-idf-release-support-schedule
+    - python .gitlab/ci/merge_bin.py
 
 .build_idf_active_release_version:
   parallel:
-    matrix:                               #  EOL date
-      - IMAGE: espressif/idf:release-v5.5 # 2028-01-21
+    matrix:
+      - IMAGE: espressif/idf:release-v5.5
 
 build_application_basic_demo:
   extends:
@@ -79,3 +75,34 @@ build_application_basic_demo:
         EXAMPLE_TARGET: esp32s3
   variables:
     EXAMPLE_DIR: application/basic_demo
+
+collect_firmware_manifest:
+  stage: deploy
+  tags:
+    - build
+  image: python:3.13-slim
+  variables:
+    GIT_STRATEGY: fetch
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "master" && $CI_PIPELINE_SOURCE == "push"'
+      when: on_success
+      variables:
+        DEPLOY_FIRMWARE: "1"
+    - if: '$CI_COMMIT_REF_NAME != "master" && $CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: on_success
+      variables:
+        DEPLOY_FIRMWARE: "0"
+    - when: never
+  needs:
+    - job: build_application_basic_demo
+      artifacts: true
+  script:
+    - python .gitlab/ci/generate_firmware_json.py
+    - |
+      echo "DEPLOY_FIRMWARE: $DEPLOY_FIRMWARE"
+  artifacts:
+    when: always
+    paths:
+      - firmware.json
+      - merged_binary/**/*
+    expire_in: 1 week
