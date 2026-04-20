@@ -1,9 +1,17 @@
 {
   "skills": [
     {
+      "id": "cap_lua_list",
+      "file": "cap_lua_list.md",
+      "summary": "Discover Lua scripts across builtin/temp/user and map listed relative paths to read_file paths.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
       "id": "cap_lua_edit",
       "file": "cap_lua_edit.md",
-      "summary": "Write Lua: batch-activate only needed lua_module_*; skip board_hardware unless unknown. read_file sources: scripts/+lua_list path. prefer ep.publish_message(\"text\").",
+      "summary": "Create and update Lua scripts through cap_lua, using builtin as references and temp/user for iteration.",
       "cap_groups": [
         "cap_lua"
       ]
@@ -11,7 +19,7 @@
     {
       "id": "cap_lua_run",
       "file": "cap_lua_run.md",
-      "summary": "List/run Lua; read_file a script as scripts/<path from lua_list_scripts>. IM args often auto-injected.",
+      "summary": "Run Lua scripts from builtin/temp/user sync or async and manage background Lua jobs.",
       "cap_groups": [
         "cap_lua"
       ]
@@ -19,7 +27,7 @@
     {
       "id": "cap_lua_patterns",
       "file": "cap_lua_patterns.md",
-      "summary": "Canonical Lua templates (xpcall, cleanup, delay in loops). Button+IM: string publish_message in callbacks.",
+      "summary": "Reusable Lua patterns for scripts that run through cap_lua.",
       "cap_groups": [
         "cap_lua"
       ]
