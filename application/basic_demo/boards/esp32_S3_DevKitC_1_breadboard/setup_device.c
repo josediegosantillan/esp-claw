@@ -45,7 +45,7 @@ typedef struct {
 #define UAC_TASK_PRIORITY           configMAX_PRIORITIES - 2
 #define UAC_TASK_STACK_SIZE         4096
 #define UAC_EVENT_QUEUE_LEN         8
-#define UAC_CONNECT_TIMEOUT_MS      5000
+#define UAC_CONNECT_TIMEOUT_MS      1500
 #define USB_UVC_DEV_NUM             1
 #define USB_UVC_TASK_PRIORITY       configMAX_PRIORITIES - 2
 #define USB_UVC_TASK_STACK_SIZE     4096
