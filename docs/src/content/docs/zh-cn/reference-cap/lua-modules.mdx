@@ -29,6 +29,7 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 | `mcpwm` | `lua_module_mcpwm` | 通用 PWM 输出（频率/占空比控制） |
 | `event_publisher` | `lua_module_event_publisher` | 从 Lua 脚本向 Event Router 发布事件 |
 | `board_manager` | `lua_module_board_manager` | 板级初始化与外设句柄获取 |
+| `uart` | `lua_module_uart` | UART 串口收发（polling 读写） |
 
 <Aside type="note" title="板级条件模块">
     `audio`、`camera`、`lcd_touch` 三个模块在 `basic_demo` 中受板级 Kconfig 条件编译控制：仅当开发板硬件支持对应外设（`CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT`、`CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT`、`CONFIG_ESP_BOARD_DEV_LCD_TOUCH_I2C_SUPPORT`）时，`basic_demo_lua_modules_register()` 才会注册这些模块。

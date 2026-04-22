@@ -4,7 +4,9 @@
 
 ### Feature:
 
-* Added i2c Lua module: Introduced support for hardware I2C bus initialization, device scanning, and standard register read/write operations.
+* Added I2C Lua module: Introduced support for hardware I2C bus initialization, device scanning, and standard register read/write operations.
+
+* Added UART Lua module: Introduced UART port open/close, polling-based read/write and line reads, with a basic demo script.
 
 ## 2026-04-21
 

@@ -143,3 +143,6 @@ dependencies:
 
   lua_module_mcpwm:
     path: ../../../components/lua_modules/lua_module_mcpwm
+
+  lua_module_uart:
+    path: ../../../components/lua_modules/lua_module_uart

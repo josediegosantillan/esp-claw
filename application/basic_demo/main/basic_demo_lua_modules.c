@@ -16,6 +16,7 @@
 #include "lua_module_system.h"
 #include "lua_module_board_manager.h"
 #include "lua_module_mcpwm.h"
+#include "lua_module_uart.h"
 
 #if defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
 #include "lua_module_audio.h"
@@ -106,6 +107,11 @@ esp_err_t basic_demo_lua_modules_register(void)
     }
 
     err = lua_module_mcpwm_register();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = lua_module_uart_register();
     if (err != ESP_OK) {
         return err;
     }

@@ -29,6 +29,7 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 | `mcpwm` | `lua_module_mcpwm` | Generic PWM output (frequency/duty control) |
 | `event_publisher` | `lua_module_event_publisher` | Publish events from Lua into the Event Router |
 | `board_manager` | `lua_module_board_manager` | Board init + peripheral handles |
+| `uart` | `lua_module_uart` | UART serial I/O (polling read/write) |
 
 <Aside type="note" title="Board-gated modules">
     In `basic_demo`, `audio`, `camera`, and `lcd_touch` are compiled in only when the board Kconfig says the hardware exists (`CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT`, `CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT`, `CONFIG_ESP_BOARD_DEV_LCD_TOUCH_I2C_SUPPORT`); `basic_demo_lua_modules_register()` registers them only in that case.
