@@ -8,6 +8,8 @@
 
 * Added UART Lua module: Introduced UART port open/close, polling-based read/write and line reads, with a basic demo script.
 
+* Added ADC Lua module: Introduced ADC channel creation, reading, and closing operations, with a basic demo script.
+
 ## 2026-04-21
 
 ### Refactor:
