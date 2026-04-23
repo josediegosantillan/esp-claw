@@ -2,7 +2,6 @@ stages:
   - pre-check
   - build
   - deploy
-  - deploy-github
 
 workflow:
   rules:
@@ -28,4 +27,3 @@ include:
   - '.gitlab/ci/build.yml'
   - '.gitlab/ci/build-doc.yml'
   - '.gitlab/ci/deploy.yml'
-  - '.gitlab/ci/deploy-github.yml'

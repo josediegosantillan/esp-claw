@@ -95,8 +95,3 @@
     - <<: *if-mr
       changes: *patterns-docs
     - when: never
-
-.rules:push:github:
-  rules:
-    - <<: *if-master-push
-    - when: never

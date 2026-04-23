@@ -28,7 +28,7 @@ export default defineConfig({
           label: "Tutorial",
           translations: {
             en: "Tutorial",
-            "zh-CN": "Tutorial",
+            "zh-CN": "使用指南",
           },
           items: [
             { slug: "tutorial", label: "Welcome", translations: { en: "Welcome", "zh-CN": "欢迎" } }, // `index.mdx`
@@ -70,7 +70,7 @@ export default defineConfig({
           ],
           translations: {
             en: "Reference",
-            "zh-CN": "参考",
+            "zh-CN": "开发参考",
           },
         },
       ],
