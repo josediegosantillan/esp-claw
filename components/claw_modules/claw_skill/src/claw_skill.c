@@ -1191,6 +1191,7 @@ static esp_err_t claw_skill_skills_list_collect(const claw_core_request_t *reque
     if (!out_context || !s_skill || !s_skill->initialized) {
         return ESP_ERR_INVALID_ARG;
     }
+    memset(out_context, 0, sizeof(*out_context));
 
     content_size = 64;
     for (size_t i = 0; i < s_skill->entry_count; i++) {
@@ -1214,7 +1215,6 @@ static esp_err_t claw_skill_skills_list_collect(const claw_core_request_t *reque
         return ESP_ERR_NOT_FOUND;
     }
 
-    memset(out_context, 0, sizeof(*out_context));
     out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
     out_context->content = content;
     return ESP_OK;
@@ -1235,6 +1235,7 @@ static esp_err_t claw_skill_active_docs_collect(const claw_core_request_t *reque
     if (!request || !out_context || !request->session_id || !request->session_id[0]) {
         return ESP_ERR_NOT_FOUND;
     }
+    memset(out_context, 0, sizeof(*out_context));
 
     err = load_active_skill_ids_from_disk(request->session_id, &active_skill_ids, &active_skill_count);
     if (err != ESP_OK) {
@@ -1266,7 +1267,6 @@ static esp_err_t claw_skill_active_docs_collect(const claw_core_request_t *reque
         return ESP_ERR_NOT_FOUND;
     }
 
-    memset(out_context, 0, sizeof(*out_context));
     out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
     out_context->content = content;
     return ESP_OK;

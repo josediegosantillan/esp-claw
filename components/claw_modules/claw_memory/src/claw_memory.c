@@ -716,6 +716,7 @@ static esp_err_t claw_memory_long_term_collect(const claw_core_request_t *reques
     if (!out_context) {
         return ESP_ERR_INVALID_ARG;
     }
+    memset(out_context, 0, sizeof(*out_context));
 
     err = claw_memory_load_index(&index_root);
     if (err != ESP_OK) {
@@ -761,7 +762,6 @@ static esp_err_t claw_memory_long_term_collect(const claw_core_request_t *reques
         off += snprintf(content + off, buf_size - off, "- (empty)\n");
     }
 
-    memset(out_context, 0, sizeof(*out_context));
     out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
     out_context->content = content;
 

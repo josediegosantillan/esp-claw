@@ -399,6 +399,7 @@ static esp_err_t claw_cap_tools_collect(const claw_core_request_t *request,
     if (!request || !out_context) {
         return ESP_ERR_INVALID_ARG;
     }
+    memset(out_context, 0, sizeof(*out_context));
 
     ctx.session_id = request->session_id;
     ctx.channel = request->source_channel;
@@ -412,7 +413,6 @@ static esp_err_t claw_cap_tools_collect(const claw_core_request_t *request,
         return ESP_ERR_NOT_FOUND;
     }
 
-    memset(out_context, 0, sizeof(*out_context));
     out_context->kind = CLAW_CORE_CONTEXT_KIND_TOOLS;
     out_context->content = tools_json;
     return ESP_OK;
@@ -749,7 +749,7 @@ static esp_err_t claw_cap_ensure_descriptor_capacity_locked(size_t additional_fr
     s_runtime.descriptor_slots = new_slots;
     s_runtime.descriptor_list_snapshot = new_snapshot;
     s_runtime.descriptor_capacity = new_capacity;
-    ESP_LOGI(TAG, "Expanded descriptor capacity to %u", (unsigned)new_capacity);
+    ESP_LOGD(TAG, "Expanded descriptor capacity to %u", (unsigned)new_capacity);
     return ESP_OK;
 }
 
@@ -810,7 +810,7 @@ static esp_err_t claw_cap_ensure_group_capacity_locked(size_t additional_free_sl
     s_runtime.group_slots = new_slots;
     s_runtime.group_list_snapshot = new_snapshot;
     s_runtime.group_capacity = new_capacity;
-    ESP_LOGI(TAG, "Expanded group capacity to %u", (unsigned)new_capacity);
+    ESP_LOGD(TAG, "Expanded group capacity to %u", (unsigned)new_capacity);
     return ESP_OK;
 }
 

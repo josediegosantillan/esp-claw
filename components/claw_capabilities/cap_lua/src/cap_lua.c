@@ -1119,6 +1119,7 @@ static esp_err_t cap_lua_async_jobs_collect(const claw_core_request_t *request,
     if (!out_context) {
         return ESP_ERR_INVALID_ARG;
     }
+    memset(out_context, 0, sizeof(*out_context));
 
     count = cap_lua_async_collect_active_snapshots(snapshots,
                                                    sizeof(snapshots) / sizeof(snapshots[0]));
@@ -1169,7 +1170,6 @@ static esp_err_t cap_lua_async_jobs_collect(const claw_core_request_t *request,
                         "Never claim a job is stopped/switched without calling one of these.\n");
     }
 
-    memset(out_context, 0, sizeof(*out_context));
     out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
     out_context->content = content;
     return ESP_OK;

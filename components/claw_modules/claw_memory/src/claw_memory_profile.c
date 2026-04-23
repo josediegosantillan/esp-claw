@@ -103,6 +103,7 @@ static esp_err_t claw_memory_profile_collect(const claw_core_request_t *request,
     if (!out_context || !s_memory.initialized) {
         return ESP_ERR_INVALID_ARG;
     }
+    memset(out_context, 0, sizeof(*out_context));
     for (i = 0; i < 3; i++) {
         if (claw_memory_profile_dup_nonempty(paths[i], &parts[i]) == ESP_OK) {
             total_len += strlen(titles[i]) + strlen(paths[i]) + strlen(parts[i]) + 12;
@@ -137,7 +138,6 @@ static esp_err_t claw_memory_profile_collect(const claw_core_request_t *request,
         free(parts[i]);
     }
 
-    memset(out_context, 0, sizeof(*out_context));
     out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
     out_context->content = content;
     return ESP_OK;
