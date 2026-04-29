@@ -51,6 +51,8 @@
 #define CAP_IM_FEISHU_MAX_HEADERS 16
 #define CAP_IM_FEISHU_MAX_RESPONSE 4096
 #define CAP_IM_FEISHU_MAX_CHUNK_LEN 1800
+#define CAP_IM_FEISHU_MAX_CARD_MARKDOWN_LEN 6000
+#define CAP_IM_FEISHU_MAX_CARD_CONTENT_LEN 8192
 #define CAP_IM_FEISHU_DEDUP_CACHE_SIZE 64
 #define CAP_IM_FEISHU_RECONNECT_DELAY_MS 3000
 #define CAP_IM_FEISHU_INITIAL_CONNECT_TIMEOUT_MS 15000
@@ -2023,6 +2025,112 @@ static esp_err_t cap_im_feishu_send_message_content(const char *chat_id,
     return err;
 }
 
+static esp_err_t cap_im_feishu_build_markdown_card_content(const char *message,
+                                                           char **out_content)
+{
+    cJSON *card = NULL;
+    cJSON *body = NULL;
+    cJSON *elements = NULL;
+    cJSON *element = NULL;
+    char *content_str = NULL;
+    size_t message_len = 0;
+    size_t content_len = 0;
+    esp_err_t err = ESP_OK;
+
+    if (out_content) {
+        *out_content = NULL;
+    }
+    if (!message || !message[0] || !out_content) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    message_len = strlen(message);
+    if (message_len > CAP_IM_FEISHU_MAX_CARD_MARKDOWN_LEN) {
+        ESP_LOGW(TAG,
+                 "Feishu markdown card skipped, message too large len=%u max=%u",
+                 (unsigned int)message_len,
+                 (unsigned int)CAP_IM_FEISHU_MAX_CARD_MARKDOWN_LEN);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    card = cJSON_CreateObject();
+    if (!card) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    body = cJSON_CreateObject();
+    elements = cJSON_CreateArray();
+    element = cJSON_CreateObject();
+    if (!body || !elements || !element ||
+            !cJSON_AddStringToObject(card, "schema", "2.0") ||
+            !cJSON_AddStringToObject(element, "tag", "markdown") ||
+            !cJSON_AddStringToObject(element, "content", message)) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    if (!cJSON_AddItemToArray(elements, element)) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+    element = NULL;
+
+    if (!cJSON_AddItemToObject(body, "elements", elements)) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+    elements = NULL;
+
+    if (!cJSON_AddItemToObject(card, "body", body)) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+    body = NULL;
+
+    content_str = cJSON_PrintUnformatted(card);
+    if (!content_str) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    content_len = strlen(content_str);
+    if (content_len > CAP_IM_FEISHU_MAX_CARD_CONTENT_LEN) {
+        ESP_LOGW(TAG,
+                 "Feishu markdown card skipped, payload too large len=%u max=%u",
+                 (unsigned int)content_len,
+                 (unsigned int)CAP_IM_FEISHU_MAX_CARD_CONTENT_LEN);
+        err = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    *out_content = content_str;
+    content_str = NULL;
+
+cleanup:
+    free(content_str);
+    cJSON_Delete(element);
+    cJSON_Delete(elements);
+    cJSON_Delete(body);
+    cJSON_Delete(card);
+    return err;
+}
+
+static esp_err_t cap_im_feishu_send_markdown_card(const char *chat_id,
+                                                  const char *message)
+{
+    char *card_content = NULL;
+    esp_err_t err;
+
+    err = cap_im_feishu_build_markdown_card_content(message, &card_content);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = cap_im_feishu_send_message_content(chat_id, "interactive", card_content);
+    free(card_content);
+    return err;
+}
+
 static esp_err_t cap_im_feishu_upload_media(const char *path,
                                             bool is_image,
                                             char *out_key,
@@ -2343,7 +2451,14 @@ static esp_err_t cap_im_feishu_send_message_execute(const char *input_json,
         return ESP_ERR_INVALID_ARG;
     }
 
-    err = cap_im_feishu_send_text(chat_id, message);
+    err = cap_im_feishu_send_markdown_card(chat_id, message);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "Feishu markdown card send failed chat=%s err=%s, falling back to text",
+                 chat_id,
+                 esp_err_to_name(err));
+        err = cap_im_feishu_send_text(chat_id, message);
+    }
     cJSON_Delete(root);
     if (err != ESP_OK) {
         snprintf(output, output_size, "{\"ok\":false,\"error\":\"%s\"}", esp_err_to_name(err));

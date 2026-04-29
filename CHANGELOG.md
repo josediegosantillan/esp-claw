@@ -20,10 +20,15 @@
 
 * Make max tokens configurable
 
+* Sent Feishu `feishu_send_message` responses as Markdown-capable interactive cards with plain-text fallback. Added Feishu inbound rich text `post` message flattening to Markdown text, including styled text, links, mentions, code blocks, horizontal rules, and image/file placeholders.
+
+* Preserved Feishu inbound file names in saved attachment paths while keeping the message hash prefix for uniqueness.
+
+* Added Feishu rich text `post` embedded attachment handling so inline images and media/file elements are queued through the existing attachment save flow.
+
 ### Change:
 
 * Removed the deprecated `application/basic_demo` app and its CI/build rules.
-
 
 ## 2026-04-29
 
