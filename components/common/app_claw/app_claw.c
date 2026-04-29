@@ -91,7 +91,7 @@ static esp_err_t init_memory(const app_claw_config_t *config,
         .session_root_dir = paths->memory_session_root,
         .memory_root_dir = paths->memory_root_dir,
         .max_session_messages = 20,
-        .max_message_chars = 1024,
+        .max_message_chars = 4096,
         .llm = {
             .api_key = config->llm_api_key,
             .backend_type = config->llm_backend_type,
@@ -268,7 +268,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
     core_config.task_stack_size = 16 * 1024;
     core_config.task_priority = 5;
     core_config.task_core = tskNO_AFFINITY;
-    core_config.max_tool_iterations = 20;
+    core_config.max_tool_iterations = 32;
     core_config.request_queue_len = 4;
     core_config.response_queue_len = 4;
     core_config.max_context_providers = 8;

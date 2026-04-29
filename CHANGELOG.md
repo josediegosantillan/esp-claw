@@ -1,6 +1,15 @@
 # ChangeLog
 
-## Unreleased
+## 2026-04-29
+
+### Feature:
+* Increased the Claw capability tool result buffer to 32 KB so larger tool responses can be returned. Updated `cap_files` file reads to reject oversized files before reading and return an explicit error when the file exceeds the max read limit.
+  
+* Increased Claw memory session message buffers to 4096 chars.
+  
+* Raised the Edge Agent tool iteration limit to 32 for longer multi-step interactions.
+
+* Updated Claw memory Session History collection to size its JSON buffer from retained session records instead of worst-case configuration limits, reducing unnecessary heap usage for short histories.
 
 ### Feature:
 
