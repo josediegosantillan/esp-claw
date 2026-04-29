@@ -4,6 +4,8 @@
 
 ### Feature:
 
+* Updated the emote layout asset to change the GFX label scroll speed.
+
 * Refactored the Web Config interface:
   * Introduced support for fine-grained configuration controls 
   * Added a basic online chat module.
@@ -48,9 +50,26 @@
 
 ### Fix:
 
+* Persisted failed `claw_core` agent turns to session history so follow-up turns can see prior failure traces.
 * Cleared context outputs before collection across Lua jobs, tool catalogs, memory providers, and skill prompts so failed collection paths do not leak stale content.
 
 * Fixed LilyGO T-Display-S3 LCD startup behavior.
+
+## 2026-04-28
+
+### Fix:
+
+* Reduced `httpd` task stack pressure in Edge Agent by moving large configuration and WeChat login status structures from stack allocation to heap-backed buffers across the config and WeChat HTTP handlers.
+
+## 2026-04-27
+
+### Feature:
+
+* Added microsecond delay support to `lua_module_delay`.
+
+* Extended `lua_module_mcpwm` with dual-channel output support, updated the MCPWM demo script, and refreshed the related skill guide.
+
+## 2026-04-21
 
 ## 2026-04-28
 
