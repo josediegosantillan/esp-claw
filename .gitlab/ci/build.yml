@@ -115,5 +115,8 @@ build_application_edge_agent:
       - IMAGE: espressif/idf:release-v5.5
         EXAMPLE_BOARD: esp_box_3
         EXAMPLE_TARGET: esp32s3
+      - IMAGE: espressif/idf:release-v5.5
+        EXAMPLE_BOARD: dfrobot_k10
+        EXAMPLE_TARGET: esp32s3
   variables:
     EXAMPLE_DIR: application/edge_agent
