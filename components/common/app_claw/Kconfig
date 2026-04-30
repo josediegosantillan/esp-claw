@@ -232,6 +232,13 @@ menu "App Claw Config"
                 Enable the button Lua module and keep app_claw's direct dependency
                 on lua_module_button when Lua capability is enabled.
 
+        config APP_CLAW_LUA_MODULE_KNOB
+            bool "Enable knob (rotary encoder) Lua module"
+            default n
+            help
+                Enable the knob Lua module and keep app_claw's direct dependency
+                on lua_module_knob when Lua capability is enabled.
+
         config APP_CLAW_LUA_MODULE_DELAY
             bool "Enable delay Lua module"
             default y

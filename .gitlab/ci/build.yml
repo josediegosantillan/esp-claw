@@ -92,6 +92,14 @@ build_application_edge_agent:
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "espressif"
 
+      - EXAMPLE_BOARD: esp32_p4_eye
+        EXAMPLE_TARGET: esp32p4
+        EXAMPLE_BOARD_BRAND: "espressif"
+
+      - EXAMPLE_BOARD: esp32_p4x_eye
+        EXAMPLE_TARGET: esp32p4
+        EXAMPLE_BOARD_BRAND: "espressif"
+
       - EXAMPLE_BOARD: m5stack_sticks3
         EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "m5stack"

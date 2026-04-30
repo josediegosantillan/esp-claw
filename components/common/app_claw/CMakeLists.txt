@@ -126,6 +126,10 @@ if(CONFIG_APP_CLAW_CAP_LUA AND CONFIG_APP_CLAW_LUA_MODULE_BUTTON)
     list(APPEND app_claw_requires lua_module_button)
 endif()
 
+if(CONFIG_APP_CLAW_CAP_LUA AND CONFIG_APP_CLAW_LUA_MODULE_KNOB)
+    list(APPEND app_claw_requires lua_module_knob)
+endif()
+
 if(CONFIG_APP_CLAW_CAP_LUA AND CONFIG_APP_CLAW_LUA_MODULE_ADC)
     list(APPEND app_claw_requires lua_module_adc)
 endif()

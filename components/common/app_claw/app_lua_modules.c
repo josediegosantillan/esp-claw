@@ -40,6 +40,9 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_BUTTON
 #include "lua_module_button.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_KNOB
+#include "lua_module_knob.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_ESP_HEAP
 #include "lua_module_esp_heap.h"
 #endif
@@ -280,6 +283,14 @@ static esp_err_t app_lua_register_button(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_MODULE_KNOB
+static esp_err_t app_lua_register_knob(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_knob_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_MODULE_ESP_HEAP
 static esp_err_t app_lua_register_esp_heap(const char *fatfs_base_path)
 {
@@ -428,6 +439,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_BUTTON
     { "button", "Button", app_lua_register_button },
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_KNOB
+    { "knob", "Knob", app_lua_register_knob },
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_DISPLAY
     { "display", "Display", app_lua_register_display },
 #endif
@@ -502,6 +516,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BUTTON
     { "button", "Button" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_KNOB
+    { "knob", "Knob" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_DISPLAY
     { "display", "Display" },
