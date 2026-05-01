@@ -8,6 +8,15 @@
         "cap_time",
         "cap_web_search"
       ]
+    },
+    {
+      "id": "esp32_coding_assistant",
+      "file": "esp32_coding_assistant.md",
+      "summary": "Assistant for programming ESP32 with ESP-Claw using Lua scripts, files, router rules, Telegram, and safe hardware practices.",
+      "cap_groups": [
+        "cap_lua",
+        "cap_files"
+      ]
     }
   ]
 }
